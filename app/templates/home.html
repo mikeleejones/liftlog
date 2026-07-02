@@ -9,6 +9,24 @@
   <nav class="mono nav-links"><a href="/routines">routines</a></nav>
 </header>
 
+{% if deload %}
+<div class="card deload-banner">
+  <div class="header-row">
+    <div>
+      <div class="mono accent-text-gold">deload week — weights pre-set</div>
+      <div class="mono muted card-meta">60% × 2×10, sessions excluded from progression</div>
+    </div>
+    <form method="post" action="/deload/defer">
+      <button class="btn-quiet mono" type="submit">defer</button>
+    </form>
+  </div>
+</div>
+{% elif deload_deferred %}
+<div class="card">
+  <div class="mono muted card-meta">deload deferred — resumes next week</div>
+</div>
+{% endif %}
+
 {% if in_progress %}
 <a class="card resume-card accent-border-{{ in_progress_accent }}" href="/workout/{{ in_progress.id }}">
   <div class="card-title">{{ in_progress.routine_name or 'ad-hoc session' }}</div>
@@ -23,7 +41,12 @@
 {% endif %}
 {% for r in routines %}
 <div class="card routine-card accent-border-{{ r.accent }}">
-  <div class="card-title">{{ r.name }}</div>
+  <div class="header-row">
+    <div class="card-title">{{ r.name }}</div>
+    {% if r.progress_ready and not deload %}
+    <span class="chip chip-progress mono">{{ r.progress_ready }} lift{{ '' if r.progress_ready == 1 else 's' }} ready ↑</span>
+    {% endif %}
+  </div>
   <div class="mono muted card-meta">{{ r.exercise_count }} exercises</div>
   <form method="post" action="/workout/start">
     <input type="hidden" name="routine_id" value="{{ r.id }}">

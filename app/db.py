@@ -290,14 +290,15 @@ def run_week_completion(db):
     now = datetime.now(timezone.utc)
     completed = state["completed_weeks"]
     since_deload = state["weeks_since_deload"]
+    deferred = state["deload_deferred_until"]
     program_week = state["program_week"]
     changed = False
     while anchor + timedelta(days=7) <= now:
         window_end = anchor + timedelta(days=7)
+        window = (anchor.strftime("%Y-%m-%dT%H:%M:%SZ"), window_end.strftime("%Y-%m-%dT%H:%M:%SZ"))
         count = db.execute(
             "SELECT COUNT(*) FROM workout WHERE finished_at IS NOT NULL AND is_deload = 0 "
-            "AND started_at >= ? AND started_at < ?",
-            (anchor.strftime("%Y-%m-%dT%H:%M:%SZ"), window_end.strftime("%Y-%m-%dT%H:%M:%SZ")),
+            "AND started_at >= ? AND started_at < ?", window,
         ).fetchone()[0]
         required, program_id = sessions_required(db, program_week)
         if count >= required:
@@ -308,12 +309,22 @@ def run_week_completion(db):
                     "SELECT weeks_count FROM program WHERE id = ?", (program_id,)
                 ).fetchone()[0]
                 program_week = program_week % weeks_count + 1
+        # a week in which deload sessions were finished resets the deload clock;
+        # deload weeks add nothing to completed_weeks and leave program_week alone
+        deload_count = db.execute(
+            "SELECT COUNT(*) FROM workout WHERE finished_at IS NOT NULL AND is_deload = 1 "
+            "AND started_at >= ? AND started_at < ?", window,
+        ).fetchone()[0]
+        if deload_count > 0:
+            since_deload = 0
+            deferred = None
         anchor = window_end
         changed = True
     if changed:
         db.execute(
             "UPDATE program_state SET completed_weeks = ?, weeks_since_deload = ?, "
-            "week_anchor = ?, program_week = ? WHERE id = 1",
-            (completed, since_deload, anchor.strftime("%Y-%m-%dT%H:%M:%SZ"), program_week),
+            "deload_deferred_until = ?, week_anchor = ?, program_week = ? WHERE id = 1",
+            (completed, since_deload, deferred,
+             anchor.strftime("%Y-%m-%dT%H:%M:%SZ"), program_week),
         )
         db.commit()

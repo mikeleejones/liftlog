@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, importer
+from . import auth, catalog, importer, progression
 from .config import SECRET
 from .db import get_db, init_db, run_week_completion, sessions_required, utcnow
 
@@ -96,16 +96,53 @@ def home(request: Request):
         "WHERE w.finished_at IS NULL AND w.started_at >= ? ORDER BY w.started_at DESC LIMIT 1",
         (cutoff,),
     ).fetchone()
+
+    now = utcnow()
+    deload = progression.deload_active(db, now)
+    deload_deferred = bool(
+        state["weeks_since_deload"] >= 3
+        and state["deload_deferred_until"]
+        and state["deload_deferred_until"] > now
+    )
+
+    routine_cards = []
+    for r in routines:
+        ready = 0
+        for re in db.execute(
+            "SELECT re.target_sets, re.rep_min, re.rep_max, e.* FROM routine_exercise re "
+            "JOIN exercise e ON e.id = re.exercise_id WHERE re.routine_id = ?",
+            (r["id"],),
+        ).fetchall():
+            s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
+            if s["kind"] == "progress":
+                ready += 1
+        routine_cards.append(dict(r, accent=accent_for(r["name"]), progress_ready=ready))
+
     db.close()
     return templates.TemplateResponse(request, "home.html", {
-        "routines": [dict(r, accent=accent_for(r["name"])) for r in routines],
+        "routines": routine_cards,
         "sessions_this_week": sessions_this_week,
         "sessions_required": required,
         "program": active,
         "program_week": state["program_week"],
+        "deload": deload,
+        "deload_deferred": deload_deferred,
         "in_progress": in_progress,
         "in_progress_accent": accent_for(in_progress["routine_name"] or "") if in_progress else None,
     })
+
+
+@app.post("/deload/defer")
+def defer_deload(request: Request):
+    if not auth.is_authed(request):
+        return login_redirect()
+    db = get_db()
+    state = db.execute("SELECT week_anchor FROM program_state WHERE id = 1").fetchone()
+    until = (parse_ts(state["week_anchor"]) + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db.execute("UPDATE program_state SET deload_deferred_until = ? WHERE id = 1", (until,))
+    db.commit()
+    db.close()
+    return RedirectResponse("/", status_code=303)
 
 
 # ---- routines + import ----
@@ -245,9 +282,11 @@ def start_workout(request: Request, routine_id: int = Form(...)):
     if not auth.is_authed(request):
         return login_redirect()
     db = get_db()
+    now = utcnow()
+    is_deload = 1 if progression.deload_active(db, now) else 0
     cur = db.execute(
-        "INSERT INTO workout (routine_id, started_at) VALUES (?, ?)",
-        (routine_id, utcnow()),
+        "INSERT INTO workout (routine_id, started_at, is_deload) VALUES (?, ?, ?)",
+        (routine_id, now, is_deload),
     )
     db.commit()
     workout_id = cur.lastrowid
@@ -255,18 +294,51 @@ def start_workout(request: Request, routine_id: int = Form(...)):
     return RedirectResponse(f"/workout/{workout_id}", status_code=303)
 
 
-def suggestion_for(db, exercise_id: int, workout_id: int, rep_min: int, rep_max: int):
-    """v0.1: suggest the last working-set weight/reps from the most recent prior
-    workout. Real double-progression logic lands in v0.3."""
-    row = db.execute(
-        "SELECT weight_kg, reps FROM set_log "
-        "WHERE exercise_id = ? AND set_type = 'normal' AND workout_id != ? "
-        "ORDER BY logged_at DESC, id DESC LIMIT 1",
-        (exercise_id, workout_id),
-    ).fetchone()
-    if row is None:
-        return 20.0, rep_min
-    return row["weight_kg"], min(max(row["reps"], rep_min), rep_max)
+def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
+                      rest_seconds, is_primary):
+    """The per-exercise object the Active Workout JS consumes. Deload workouts
+    override the prescription with 60% x 2x10 and skip warmup ramps."""
+    workout_id = workout["id"]
+    if workout["is_deload"]:
+        s = progression.deload_prefill(db, exercise, exclude_workout_id=workout_id)
+        target_sets, rep_min, rep_max = 2, 10, 10
+        warmups = []
+    else:
+        s = progression.suggest(db, exercise, target_sets, rep_min, rep_max,
+                                exclude_workout_id=workout_id)
+        warmups = progression.warmup_ramp(s["weight_kg"], exercise["display_unit"]) \
+            if is_primary else []
+    sets = db.execute(
+        "SELECT set_number, weight_kg, reps FROM set_log "
+        "WHERE workout_id = ? AND exercise_id = ? AND set_type = 'normal' "
+        "ORDER BY set_number",
+        (workout_id, exercise["id"]),
+    ).fetchall()
+    warmups_logged = db.execute(
+        "SELECT COUNT(*) FROM set_log WHERE workout_id = ? AND exercise_id = ? "
+        "AND set_type = 'warmup'",
+        (workout_id, exercise["id"]),
+    ).fetchone()[0]
+    return {
+        "exercise_id": exercise["id"],
+        "name": exercise["name"],
+        "cue": exercise["cue"],
+        "youtube_query": exercise["youtube_query"],
+        "display_unit": exercise["display_unit"],
+        "increment_kg": exercise["increment_kg"],
+        "target_sets": target_sets,
+        "rep_min": rep_min,
+        "rep_max": rep_max,
+        "rest_seconds": rest_seconds,
+        "is_primary": is_primary,
+        "suggest_weight_kg": s["weight_kg"],
+        "suggest_reps": s["reps"],
+        "suggest_kind": s["kind"],
+        "warmups": warmups,
+        "warmups_logged": warmups_logged,
+        "skipped": False,
+        "sets": [dict(row) for row in sets],
+    }
 
 
 @app.get("/workout/{workout_id}", response_class=HTMLResponse)
@@ -283,42 +355,41 @@ def workout_page(request: Request, workout_id: int):
         return RedirectResponse(f"/workout/{workout_id}/summary", status_code=303)
     routine = db.execute("SELECT * FROM routine WHERE id = ?", (workout["routine_id"],)).fetchone()
     rows = db.execute(
-        "SELECT re.*, e.name, e.cue, e.youtube_query, e.display_unit, e.increment_kg "
-        "FROM routine_exercise re JOIN exercise e ON e.id = re.exercise_id "
-        "WHERE re.routine_id = ? ORDER BY re.position",
+        "SELECT re.* FROM routine_exercise re WHERE re.routine_id = ? ORDER BY re.position",
         (workout["routine_id"],),
     ).fetchall()
+    # substitutions recorded earlier in this workout (resume case)
+    subs = {
+        r["planned_exercise_id"]: r["actual_exercise_id"]
+        for r in db.execute(
+            "SELECT planned_exercise_id, actual_exercise_id FROM substitution "
+            "WHERE workout_id = ?", (workout_id,),
+        )
+    }
     exercises = []
     for r in rows:
-        sets = db.execute(
-            "SELECT set_number, weight_kg, reps FROM set_log "
-            "WHERE workout_id = ? AND exercise_id = ? AND set_type = 'normal' "
-            "ORDER BY set_number",
-            (workout_id, r["exercise_id"]),
-        ).fetchall()
-        weight, reps = suggestion_for(db, r["exercise_id"], workout_id, r["rep_min"], r["rep_max"])
-        exercises.append({
-            "exercise_id": r["exercise_id"],
-            "name": r["name"],
-            "cue": r["cue"],
-            "youtube_query": r["youtube_query"],
-            "display_unit": r["display_unit"],
-            "increment_kg": r["increment_kg"],
-            "target_sets": r["target_sets"],
-            "rep_min": r["rep_min"],
-            "rep_max": r["rep_max"],
-            "rest_seconds": r["rest_seconds"],
-            "is_primary": bool(r["is_primary"]),
-            "suggest_weight_kg": weight,
-            "suggest_reps": reps,
-            "sets": [dict(s) for s in sets],
-        })
+        exercise_id = r["exercise_id"]
+        skipped = False
+        if exercise_id in subs:
+            if subs[exercise_id] is None:
+                skipped = True
+            else:
+                exercise_id = subs[exercise_id]
+        exercise = db.execute("SELECT * FROM exercise WHERE id = ?", (exercise_id,)).fetchone()
+        payload = _exercise_payload(
+            db, workout, exercise, r["target_sets"], r["rep_min"], r["rep_max"],
+            r["rest_seconds"], bool(r["is_primary"]),
+        )
+        payload["planned_exercise_id"] = r["exercise_id"]
+        payload["skipped"] = skipped
+        exercises.append(payload)
     db.close()
     routine_name = routine["name"] if routine else "ad-hoc session"
     state = {
         "workout_id": workout_id,
         "routine_name": routine_name,
         "accent": accent_for(routine_name),
+        "is_deload": bool(workout["is_deload"]),
         "exercises": exercises,
     }
     return templates.TemplateResponse(request, "workout.html", {
@@ -338,16 +409,160 @@ async def log_set(request: Request, workout_id: int):
     if workout is None or workout["finished_at"]:
         db.close()
         return JSONResponse({"error": "workout not open"}, status_code=409)
+    set_type = body.get("set_type", "normal")
+    if set_type not in ("normal", "warmup"):
+        db.close()
+        return JSONResponse({"error": "bad set_type"}, status_code=400)
     db.execute(
         "INSERT INTO set_log (workout_id, exercise_id, set_number, set_type, weight_kg, reps, "
-        "was_suggested, logged_at) VALUES (?, ?, ?, 'normal', ?, ?, ?, ?)",
-        (workout_id, int(body["exercise_id"]), int(body["set_number"]),
+        "was_suggested, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (workout_id, int(body["exercise_id"]), int(body["set_number"]), set_type,
          float(body["weight_kg"]), int(body["reps"]),
          1 if body.get("was_suggested") else 0, utcnow()),
     )
     db.commit()
     db.close()
     return {"ok": True}
+
+
+@app.get("/api/workout/{workout_id}/substitutes/{planned_exercise_id}")
+def substitutes(request: Request, workout_id: int, planned_exercise_id: int,
+                current: int = 0):
+    if not auth.is_authed(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    db = get_db()
+    workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
+    if workout is None:
+        db.close()
+        return JSONResponse({"error": "no such workout"}, status_code=404)
+    # never suggest what's already in play this workout: the exercise being
+    # swapped, earlier swap targets, or anything with sets logged today
+    exclude = {current} if current else set()
+    for r in db.execute(
+        "SELECT actual_exercise_id AS id FROM substitution "
+        "WHERE workout_id = ? AND actual_exercise_id IS NOT NULL "
+        "UNION SELECT DISTINCT exercise_id FROM set_log WHERE workout_id = ?",
+        (workout_id, workout_id),
+    ):
+        exclude.add(r["id"])
+    candidates = progression.substitution_candidates(
+        db, planned_exercise_id, workout["routine_id"], exclude_ids=exclude
+    )
+    result = [
+        {
+            "id": c["id"],
+            "name": c["name"],
+            "movement_pattern": c["movement_pattern"],
+            "muscle_group": c["muscle_group"],
+            "last_used": c["last_used"],
+            "from_catalog": False,
+        }
+        for c in candidates
+    ]
+    if len(result) < 3:
+        planned = db.execute(
+            "SELECT * FROM exercise WHERE id = ?", (planned_exercise_id,)
+        ).fetchone()
+        exclude_names = {c["name"] for c in result}
+        for entry in catalog.suggestions(db, planned, exclude_names, 3 - len(result)):
+            result.append({
+                "id": None,
+                "name": entry["name"],
+                "movement_pattern": entry["movement_pattern"],
+                "muscle_group": entry["muscle_group"],
+                "last_used": None,
+                "from_catalog": True,
+            })
+    db.close()
+    return {"candidates": result}
+
+
+@app.post("/api/workout/{workout_id}/substitute")
+async def substitute(request: Request, workout_id: int):
+    if not auth.is_authed(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = await request.json()
+    planned_id = int(body["planned_exercise_id"])
+    db = get_db()
+    workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
+    if workout is None or workout["finished_at"]:
+        db.close()
+        return JSONResponse({"error": "workout not open"}, status_code=409)
+
+    # re-swapping (or skipping after a swap) replaces the record, not stacks it
+    db.execute(
+        "DELETE FROM substitution WHERE workout_id = ? AND planned_exercise_id = ?",
+        (workout_id, planned_id),
+    )
+
+    if body.get("skip"):
+        db.execute(
+            "INSERT INTO substitution (workout_id, planned_exercise_id, actual_exercise_id) "
+            "VALUES (?, ?, NULL)",
+            (workout_id, planned_id),
+        )
+        db.commit()
+        db.close()
+        return {"skipped": True}
+
+    now = utcnow()
+    if body.get("new_name"):
+        name = body["new_name"].strip()
+        if not name:
+            db.close()
+            return JSONResponse({"error": "empty name"}, status_code=400)
+        actual = db.execute(
+            "SELECT * FROM exercise WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+        if actual is None:
+            # catalog names bring their own tags; typed names inherit the
+            # planned exercise's
+            planned = db.execute(
+                "SELECT * FROM exercise WHERE id = ?", (planned_id,)
+            ).fetchone()
+            known = catalog.lookup(name)
+            if known:
+                pattern, group, yt = known
+            else:
+                pattern, group, yt = (planned["movement_pattern"],
+                                      planned["muscle_group"], f"{name.lower()} form")
+            actual_id = db.execute(
+                "INSERT INTO exercise (name, cue, youtube_query, movement_pattern, "
+                "muscle_group, display_unit, increment_kg, created_at) "
+                "VALUES (?, '', ?, ?, ?, ?, ?, ?)",
+                (name, yt, pattern, group, planned["display_unit"],
+                 planned["increment_kg"], now),
+            ).lastrowid
+            actual = db.execute("SELECT * FROM exercise WHERE id = ?", (actual_id,)).fetchone()
+    else:
+        actual = db.execute(
+            "SELECT * FROM exercise WHERE id = ?", (int(body["actual_exercise_id"]),)
+        ).fetchone()
+        if actual is None:
+            db.close()
+            return JSONResponse({"error": "no such exercise"}, status_code=404)
+
+    db.execute(
+        "INSERT INTO substitution (workout_id, planned_exercise_id, actual_exercise_id) "
+        "VALUES (?, ?, ?)",
+        (workout_id, planned_id, actual["id"]),
+    )
+    re = db.execute(
+        "SELECT * FROM routine_exercise WHERE routine_id = ? AND exercise_id = ?",
+        (workout["routine_id"], planned_id),
+    ).fetchone()
+    target_sets = re["target_sets"] if re else 3
+    rep_min = re["rep_min"] if re else 8
+    rep_max = re["rep_max"] if re else 12
+    rest_seconds = re["rest_seconds"] if re else 90
+    is_primary = bool(re["is_primary"]) if re else False
+    payload = _exercise_payload(
+        db, workout, actual, target_sets, rep_min, rep_max, rest_seconds, is_primary
+    )
+    payload["planned_exercise_id"] = planned_id
+    db.commit()
+    db.close()
+    return {"exercise": payload}
 
 
 @app.post("/api/exercise/{exercise_id}/unit")

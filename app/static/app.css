@@ -184,6 +184,34 @@ body {
 }
 .cancel-link { display: block; text-align: center; margin-top: 8px; }
 
+/* progression + deload */
+.chip {
+  font-size: 12px;
+  border-radius: 8px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  align-self: flex-start;
+}
+.chip-progress { color: var(--green); border: 1px solid var(--green); }
+.chip-stall { color: var(--gold); border: 1px solid var(--gold); }
+.deload-banner { border-color: var(--gold); }
+
+.btn-inline {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.skipped-note { margin-top: 12px; }
+
+.sub-new { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.sub-new-input { flex: 1; height: 44px; font-size: 15px; }
+.sub-meta { font-size: 12px; }
+
 /* login */
 .login-wrap { padding-top: 30vh; }
 .login-form { margin-top: 12px; }

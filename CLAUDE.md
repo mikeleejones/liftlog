@@ -65,8 +65,12 @@ chart), Routines + Import (paste JSON with human-readable preview), Progress
 5. Substitution: rarely used, critically important. Offer the 3 best
    alternatives (same movement_pattern first, then muscle_group, ranked by
    prior history) as full cards — never a search box as the primary path.
+   When the library has fewer than 3 alternatives, remaining slots are filled
+   from a built-in name catalog (exercise names + tags + YouTube queries
+   only — never programming advice); picking one creates it in the library.
    Type-new-exercise is the escape hatch. Swaps/skips are recorded in the
-   substitution table and never count toward stall detection.
+   substitution table (re-swapping replaces the record) and never count
+   toward stall detection.
 6. Progression: double progression per exercise. All working sets at rep_max
    -> suggest +increment next time. Stall = 3 consecutive non-deload sessions
    at same weight, no total-rep improvement -> suggest 10% reset.

@@ -4,6 +4,7 @@ const state = JSON.parse(document.getElementById("state").textContent);
 
 const KG_PER_LB = 0.45359237;
 const STEP = { kg: 2.5, lbs: 5 };
+const WARMUP_REST_SECONDS = 60;
 
 const view = document.getElementById("exercise-view");
 const progressEl = document.getElementById("workout-progress");
@@ -16,8 +17,22 @@ let currentIndex = firstPendingIndex();
 let pending = null;
 let timer = null;
 
+function exerciseDone(ex) {
+  return ex.skipped || ex.sets.length >= ex.target_sets;
+}
+
+function inWarmup(ex) {
+  return (
+    !ex.skipped &&
+    !ex.warmupsSkipped &&
+    ex.warmups.length > 0 &&
+    ex.warmups_logged < ex.warmups.length &&
+    ex.sets.length === 0
+  );
+}
+
 function firstPendingIndex() {
-  const i = state.exercises.findIndex((ex) => ex.sets.length < ex.target_sets);
+  const i = state.exercises.findIndex((ex) => !exerciseDone(ex));
   return i === -1 ? 0 : i;
 }
 
@@ -30,20 +45,27 @@ function toKg(value, unit) {
 function roundLoad(value, unit) {
   return Math.round(value / STEP[unit]) * STEP[unit];
 }
+function roundTo2(v) {
+  return Math.round(v * 100) / 100;
+}
 function fmt(value) {
-  return (Math.round(value * 100) / 100).toString();
+  return roundTo2(value).toString();
 }
 
 function resetPending(ex) {
-  pending = {
-    weight: roundLoad(toDisplay(ex.suggest_weight_kg, ex.display_unit), ex.display_unit),
+  const source = inWarmup(ex) ? ex.warmups[ex.warmups_logged] : {
+    weight_kg: ex.suggest_weight_kg,
     reps: ex.suggest_reps,
+  };
+  pending = {
+    weight: roundLoad(toDisplay(source.weight_kg, ex.display_unit), ex.display_unit),
+    reps: source.reps,
     edited: false,
   };
 }
 
 function allDone() {
-  return state.exercises.every((ex) => ex.sets.length >= ex.target_sets);
+  return state.exercises.every(exerciseDone);
 }
 
 async function api(path, body) {
@@ -56,17 +78,36 @@ async function api(path, body) {
   return res.json();
 }
 
+function esc(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
 // ---- render ----
+
+function suggestChip(ex) {
+  const w = fmt(roundLoad(toDisplay(ex.suggest_weight_kg, ex.display_unit), ex.display_unit));
+  if (ex.suggest_kind === "progress")
+    return `<span class="chip chip-progress mono">↑ ${w}</span>`;
+  if (ex.suggest_kind === "stall")
+    return `<span class="chip chip-stall mono">stalled: try ${w} ${ex.display_unit}</span>`;
+  if (ex.suggest_kind === "deload")
+    return `<span class="chip chip-stall mono">deload — 60%</span>`;
+  return "";
+}
 
 function render() {
   const ex = state.exercises[currentIndex];
   if (!pending) resetPending(ex);
-  const done = ex.sets.length;
-  const exDone = done >= ex.target_sets;
+  const warmup = inWarmup(ex);
+  const done = exerciseDone(ex);
 
   progressEl.textContent = allDone()
     ? "all exercises done"
-    : `exercise ${currentIndex + 1} of ${state.exercises.length}`;
+    : state.is_deload
+      ? `deload — exercise ${currentIndex + 1} of ${state.exercises.length}`
+      : `exercise ${currentIndex + 1} of ${state.exercises.length}`;
 
   const ytUrl =
     "https://www.youtube.com/results?search_query=" +
@@ -74,26 +115,38 @@ function render() {
 
   let html = `
     <div class="exercise-panel">
-      <div class="exercise-name">${esc(ex.name)}</div>
+      <div class="header-row">
+        <div class="exercise-name">${esc(ex.name)}</div>
+        ${suggestChip(ex)}
+      </div>
       <div class="exercise-cue">${esc(ex.cue)}</div>
-      <div class="exercise-target">${ex.target_sets} × ${ex.rep_min}–${ex.rep_max}
-        · rest ${ex.rest_seconds}s · <a href="${ytUrl}" target="_blank" rel="noopener">demo</a></div>
+      <div class="exercise-target">${ex.target_sets} × ${ex.rep_min}${ex.rep_min === ex.rep_max ? "" : "–" + ex.rep_max}
+        · rest ${ex.rest_seconds}s · <a href="${ytUrl}" target="_blank" rel="noopener">demo</a>
+        ${done ? "" : ` · <button class="btn-inline mono" id="swap-btn" type="button">swap</button>`}</div>
       <div class="done-sets">
         ${ex.sets
           .map(
             (s) => `<div class="done-set">
               <span>set ${s.set_number}</span>
-              <span>${fmt(roundTo2(toDisplay(s.weight_kg, ex.display_unit)))} ${ex.display_unit} × ${s.reps}</span>
+              <span>${fmt(toDisplay(s.weight_kg, ex.display_unit))} ${ex.display_unit} × ${s.reps}</span>
               <span class="check">done</span>
             </div>`
           )
           .join("")}
       </div>`;
 
-  if (!exDone) {
+  if (ex.skipped) {
+    html += `<div class="mono muted skipped-note">skipped</div>`;
+  } else if (!done) {
+    const label = warmup
+      ? `warmup ${ex.warmups_logged + 1} of ${ex.warmups.length}`
+      : `set ${ex.sets.length + 1} of ${ex.target_sets}`;
     html += `
       <div class="current-set">
-        <div class="section-label current-set-label">set ${done + 1} of ${ex.target_sets}</div>
+        <div class="header-row">
+          <div class="section-label current-set-label">${label}</div>
+          ${warmup ? `<button class="btn-inline mono" id="skip-warmups-btn" type="button">skip warmups</button>` : ""}
+        </div>
         <div class="big-value">${fmt(pending.weight)}
           <button class="unit-chip" id="unit-chip" type="button">${ex.display_unit}</button>
           × ${pending.reps}</div>
@@ -116,34 +169,33 @@ function render() {
           </div>
         </div>
         <button class="btn-primary accent-${state.accent}" id="log-btn" type="button">
-          ${pending.edited ? "LOG SET" : "DID AS SUGGESTED"}</button>
+          ${warmup ? "LOG WARMUP" : pending.edited ? "LOG SET" : "DID AS SUGGESTED"}</button>
       </div>`;
   } else if (allDone()) {
     html += `<button class="btn-primary accent-${state.accent}" id="finish-inline" type="button">FINISH WORKOUT</button>`;
   } else {
-    html += `<div class="mono muted" style="margin-top:12px">exercise done</div>`;
+    html += `<div class="mono muted skipped-note">exercise done</div>`;
   }
   html += `</div>`;
   view.innerHTML = html;
 
-  if (!exDone) {
+  if (!done && !ex.skipped) {
     document.getElementById("log-btn").addEventListener("click", logSet);
     document.getElementById("unit-chip").addEventListener("click", toggleUnit);
     view.querySelectorAll(".stepper-btn").forEach(bindStepper);
+    const skipWarmups = document.getElementById("skip-warmups-btn");
+    if (skipWarmups)
+      skipWarmups.addEventListener("click", () => {
+        ex.warmupsSkipped = true;
+        pending = null;
+        render();
+      });
   }
+  const swapBtn = document.getElementById("swap-btn");
+  if (swapBtn) swapBtn.addEventListener("click", openSubSheet);
   const finishInline = document.getElementById("finish-inline");
   if (finishInline) finishInline.addEventListener("click", finishWorkout);
   renderJumpList();
-}
-
-function roundTo2(v) {
-  return Math.round(v * 100) / 100;
-}
-
-function esc(s) {
-  const div = document.createElement("div");
-  div.textContent = s;
-  return div.innerHTML;
 }
 
 // ---- steppers with long-press auto-repeat ----
@@ -185,12 +237,12 @@ function bindStepper(btn) {
 // steppers must not trigger a full re-render mid-hold (it would replace the
 // button under the pointer and kill auto-repeat), so update values in place
 function updateValues() {
+  const ex = state.exercises[currentIndex];
   const w = document.getElementById("weight-value");
   const r = document.getElementById("reps-value");
   if (w) w.textContent = fmt(pending.weight);
   if (r) r.textContent = String(pending.reps);
   const big = view.querySelector(".big-value");
-  const ex = state.exercises[currentIndex];
   if (big)
     big.innerHTML = `${fmt(pending.weight)}
       <button class="unit-chip" id="unit-chip" type="button">${ex.display_unit}</button>
@@ -198,14 +250,16 @@ function updateValues() {
   const chip = document.getElementById("unit-chip");
   if (chip) chip.addEventListener("click", toggleUnit);
   const logBtn = document.getElementById("log-btn");
-  if (logBtn) logBtn.textContent = pending.edited ? "LOG SET" : "DID AS SUGGESTED";
+  if (logBtn && !inWarmup(ex))
+    logBtn.textContent = pending.edited ? "LOG SET" : "DID AS SUGGESTED";
 }
 
 // ---- actions ----
 
 async function logSet() {
   const ex = state.exercises[currentIndex];
-  const setNumber = ex.sets.length + 1;
+  const warmup = inWarmup(ex);
+  const setNumber = warmup ? ex.warmups_logged + 1 : ex.sets.length + 1;
   const weightKg = toKg(pending.weight, ex.display_unit);
   const wasSuggested = pending.edited ? 0 : 1;
   const btn = document.getElementById("log-btn");
@@ -214,6 +268,7 @@ async function logSet() {
     await api(`/api/workout/${state.workout_id}/set`, {
       exercise_id: ex.exercise_id,
       set_number: setNumber,
+      set_type: warmup ? "warmup" : "normal",
       weight_kg: weightKg,
       reps: pending.reps,
       was_suggested: wasSuggested,
@@ -223,13 +278,18 @@ async function logSet() {
     btn.textContent = "retry — not saved";
     return;
   }
-  ex.sets.push({ set_number: setNumber, weight_kg: weightKg, reps: pending.reps });
-  // carry what was actually done as the suggestion for the next set
-  ex.suggest_weight_kg = weightKg;
-  ex.suggest_reps = pending.reps;
+  if (warmup) {
+    ex.warmups_logged += 1;
+    startTimer(WARMUP_REST_SECONDS);
+  } else {
+    ex.sets.push({ set_number: setNumber, weight_kg: weightKg, reps: pending.reps });
+    // carry what was actually done as the suggestion for the next set
+    ex.suggest_weight_kg = weightKg;
+    ex.suggest_reps = pending.reps;
+    startTimer(ex.rest_seconds);
+    if (ex.sets.length >= ex.target_sets) advance();
+  }
   pending = null;
-  startTimer(ex.rest_seconds);
-  if (ex.sets.length >= ex.target_sets) advance();
   render();
 }
 
@@ -237,7 +297,7 @@ function advance() {
   const n = state.exercises.length;
   for (let offset = 1; offset <= n; offset++) {
     const i = (currentIndex + offset) % n;
-    if (state.exercises[i].sets.length < state.exercises[i].target_sets) {
+    if (!exerciseDone(state.exercises[i])) {
       currentIndex = i;
       pending = null;
       return;
@@ -248,8 +308,9 @@ function advance() {
 async function toggleUnit() {
   const ex = state.exercises[currentIndex];
   const next = ex.display_unit === "kg" ? "lbs" : "kg";
+  const prev = ex.display_unit;
   ex.display_unit = next;
-  pending.weight = roundLoad(toDisplay(toKg(pending.weight, next === "kg" ? "lbs" : "kg"), next), next);
+  pending.weight = roundLoad(toDisplay(toKg(pending.weight, prev), next), next);
   render();
   try {
     await api(`/api/exercise/${ex.exercise_id}/unit`, { unit: next });
@@ -302,19 +363,31 @@ function hideTimer() {
 
 document.getElementById("timer-skip").addEventListener("click", hideTimer);
 
-// ---- jump sheet ----
+// ---- sheets ----
 
 const sheet = document.getElementById("jump-sheet");
 const backdrop = document.getElementById("sheet-backdrop");
+const finishSheet = document.getElementById("finish-sheet");
+const subSheet = document.getElementById("sub-sheet");
+
+function closeAllSheets() {
+  sheet.hidden = true;
+  finishSheet.hidden = true;
+  subSheet.hidden = true;
+  backdrop.hidden = true;
+}
+
+// ---- jump sheet ----
 
 function renderJumpList() {
   const list = document.getElementById("jump-list");
   list.innerHTML = state.exercises
     .map((ex, i) => {
-      const done = ex.sets.length >= ex.target_sets;
-      const status = done
-        ? `<span class="mono done">done</span>`
-        : `<span class="mono muted">${ex.sets.length}/${ex.target_sets}</span>`;
+      const status = ex.skipped
+        ? `<span class="mono muted">skipped</span>`
+        : exerciseDone(ex)
+          ? `<span class="mono done">done</span>`
+          : `<span class="mono muted">${ex.sets.length}/${ex.target_sets}</span>`;
       return `<button class="jump-row ${i === currentIndex ? "current" : ""}" data-jump="${i}" type="button">
         <span>${esc(ex.name)}</span>${status}</button>`;
     })
@@ -323,35 +396,98 @@ function renderJumpList() {
     btn.addEventListener("click", () => {
       currentIndex = Number(btn.dataset.jump);
       pending = null;
-      closeSheet();
+      closeAllSheets();
       render();
     })
   );
 }
 
 function openSheet() {
+  closeAllSheets();
   sheet.hidden = false;
   backdrop.hidden = false;
   renderJumpList();
 }
-function closeSheet() {
-  sheet.hidden = true;
-  backdrop.hidden = true;
-}
 
 document.getElementById("jump-btn").addEventListener("click", openSheet);
 
-// ---- finish confirmation (only when the workout is incomplete) ----
+// ---- substitution sheet ----
 
-const finishSheet = document.getElementById("finish-sheet");
+async function openSubSheet() {
+  const ex = state.exercises[currentIndex];
+  closeAllSheets();
+  document.getElementById("sub-title").textContent = `swap ${ex.name.toLowerCase()}`;
+  document.getElementById("sub-new-name").value = "";
+  const list = document.getElementById("sub-list");
+  list.innerHTML = `<div class="mono muted card-meta">finding alternatives…</div>`;
+  subSheet.hidden = false;
+  backdrop.hidden = false;
+  const res = await fetch(
+    `/api/workout/${state.workout_id}/substitutes/${ex.planned_exercise_id}?current=${ex.exercise_id}`
+  );
+  if (!res.ok) {
+    list.innerHTML = `<div class="mono muted card-meta">could not load alternatives</div>`;
+    return;
+  }
+  const data = await res.json();
+  list.innerHTML = data.candidates
+    .map((c, i) => {
+      const meta = c.from_catalog
+        ? `${c.movement_pattern} · ${c.muscle_group} · not in library yet`
+        : `${c.movement_pattern} · ${c.muscle_group} · ${c.last_used ? "used " + c.last_used.slice(0, 10) : "never used"}`;
+      const attr = c.from_catalog ? `data-sub-new="${esc(c.name)}"` : `data-sub="${c.id}"`;
+      return `<button class="jump-row" ${attr} type="button">
+        <span>${esc(c.name)}<br>
+          <span class="mono muted sub-meta">${meta}</span></span>
+        ${c.from_catalog ? `<span class="mono muted sub-meta">new</span>` : ""}
+      </button>`;
+    })
+    .join("") || `<div class="mono muted card-meta">no alternatives available</div>`;
+  list.querySelectorAll("[data-sub]").forEach((btn) =>
+    btn.addEventListener("click", () => applySubstitute({ actual_exercise_id: Number(btn.dataset.sub) }))
+  );
+  list.querySelectorAll("[data-sub-new]").forEach((btn) =>
+    btn.addEventListener("click", () => applySubstitute({ new_name: btn.dataset.subNew }))
+  );
+}
+
+async function applySubstitute(choice) {
+  const ex = state.exercises[currentIndex];
+  const body = { planned_exercise_id: ex.planned_exercise_id, ...choice };
+  let data;
+  try {
+    data = await api(`/api/workout/${state.workout_id}/substitute`, body);
+  } catch (err) {
+    return;
+  }
+  if (data.skipped) {
+    ex.skipped = true;
+    if (!allDone()) advance();
+  } else {
+    data.exercise.warmupsSkipped = false;
+    state.exercises[currentIndex] = data.exercise;
+  }
+  pending = null;
+  closeAllSheets();
+  render();
+}
+
+document.getElementById("sub-skip-btn").addEventListener("click", () => applySubstitute({ skip: true }));
+document.getElementById("sub-new-btn").addEventListener("click", () => {
+  const name = document.getElementById("sub-new-name").value.trim();
+  if (name) applySubstitute({ new_name: name });
+});
+document.getElementById("sub-cancel-btn").addEventListener("click", closeAllSheets);
+
+// ---- finish confirmation (only when the workout is incomplete) ----
 
 function confirmFinish() {
   if (allDone()) {
     finishWorkout();
     return;
   }
-  closeSheet();
-  const done = state.exercises.filter((ex) => ex.sets.length >= ex.target_sets).length;
+  closeAllSheets();
+  const done = state.exercises.filter(exerciseDone).length;
   const logged = state.exercises.reduce((n, ex) => n + ex.sets.length, 0);
   document.getElementById("finish-summary").textContent =
     `${done} of ${state.exercises.length} exercises done — ` +
@@ -364,11 +500,6 @@ function confirmFinish() {
   backdrop.hidden = false;
 }
 
-function closeFinishSheet() {
-  finishSheet.hidden = true;
-  backdrop.hidden = true;
-}
-
 async function discardWorkout() {
   const res = await fetch(`/workout/${state.workout_id}/discard`, { method: "POST" });
   if (res.ok) window.location.href = "/";
@@ -377,10 +508,7 @@ async function discardWorkout() {
 document.getElementById("finish-btn").addEventListener("click", confirmFinish);
 document.getElementById("finish-anyway-btn").addEventListener("click", finishWorkout);
 document.getElementById("finish-discard-btn").addEventListener("click", discardWorkout);
-document.getElementById("finish-cancel-btn").addEventListener("click", closeFinishSheet);
-backdrop.addEventListener("click", () => {
-  closeSheet();
-  closeFinishSheet();
-});
+document.getElementById("finish-cancel-btn").addEventListener("click", closeAllSheets);
+backdrop.addEventListener("click", closeAllSheets);
 
 render();
