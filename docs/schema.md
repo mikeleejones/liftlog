@@ -23,7 +23,7 @@ CREATE TABLE exercise (
     muscle_group     TEXT NOT NULL,                 -- see enum below
     display_unit     TEXT NOT NULL DEFAULT 'kg'
                      CHECK (display_unit IN ('kg','lbs')),
-    increment_kg     REAL NOT NULL DEFAULT 2.5,     -- progression step, canonical kg
+    increment_kg     REAL NOT NULL DEFAULT 2.5,     -- progression step in kg; 0 = bodyweight / no-load (no load progression or stall reset)
     is_archived      INTEGER NOT NULL DEFAULT 0,    -- hidden from pickers, history kept
     created_at       TEXT NOT NULL
 );
@@ -189,7 +189,11 @@ resets `program_week` to 1.
 - **Progression suggestion** per exercise: look at working sets (`set_type =
   'normal'`) from the most recent non-deload workout containing that exercise.
   If all sets hit `rep_max` at the same weight -> suggest `weight + increment_kg`
-  (rounded to loadable increment in `display_unit`). Else -> same weight.
+  (rounded to loadable increment in `display_unit`). Else -> same weight. When
+  `increment_kg` is 0 (bodyweight / no-load), there is no weight to add: the
+  suggestion stays at the same weight and neither the progression nor the stall
+  reset applies. Import accepts `increment_kg: 0`; a positive value is not
+  required.
 - **Stall**: 3 consecutive non-deload workouts of an exercise at the same
   weight with no total-rep improvement -> suggest 10% reset. Skips and
   substitutions do not advance the stall counter.

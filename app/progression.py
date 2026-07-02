@@ -42,31 +42,35 @@ def suggest(db, exercise, target_sets, rep_min, rep_max, exclude_workout_id=None
     same weight with no total-rep improvement -> 10% reset. Else same weight,
     nudging reps toward rep_max."""
     unit = exercise["display_unit"]
+    # increment_kg == 0 means a bodyweight / no-load exercise: no weight to add,
+    # so load progression and 10% stall resets don't apply — it just tracks reps.
+    loaded = exercise["increment_kg"] > 0
     sessions = recent_sessions(db, exercise["id"], exclude_workout_id)
     if not sessions:
-        return {"weight_kg": BAR_KG, "reps": rep_min, "kind": "first"}
+        return {"weight_kg": BAR_KG if loaded else 0.0, "reps": rep_min, "kind": "first"}
     last_sets = sessions[0]["sets"]
     weights = {w for w, _ in last_sets}
     if len(weights) == 1:
         w = last_sets[0][0]
-        if len(last_sets) >= target_sets and all(r >= rep_max for _, r in last_sets):
-            return {
-                "weight_kg": round_loadable(w + exercise["increment_kg"], unit),
-                "reps": rep_min,
-                "kind": "progress",
-            }
-        if len(sessions) == 3:
-            uniform = all(
-                len({x for x, _ in s["sets"]}) == 1 and s["sets"][0][0] == w
-                for s in sessions
-            )
-            totals = [sum(r for _, r in s["sets"]) for s in sessions]  # newest first
-            if uniform and totals[0] <= totals[1] <= totals[2]:
+        if loaded:
+            if len(last_sets) >= target_sets and all(r >= rep_max for _, r in last_sets):
                 return {
-                    "weight_kg": round_loadable(w * 0.9, unit),
+                    "weight_kg": round_loadable(w + exercise["increment_kg"], unit),
                     "reps": rep_min,
-                    "kind": "stall",
+                    "kind": "progress",
                 }
+            if len(sessions) == 3:
+                uniform = all(
+                    len({x for x, _ in s["sets"]}) == 1 and s["sets"][0][0] == w
+                    for s in sessions
+                )
+                totals = [sum(r for _, r in s["sets"]) for s in sessions]  # newest first
+                if uniform and totals[0] <= totals[1] <= totals[2]:
+                    return {
+                        "weight_kg": round_loadable(w * 0.9, unit),
+                        "reps": rep_min,
+                        "kind": "stall",
+                    }
         lowest = min(r for _, r in last_sets)
         return {
             "weight_kg": w,
@@ -93,10 +97,13 @@ def warmup_ramp(weight_kg, unit):
 
 
 def deload_prefill(db, exercise, exclude_workout_id=None):
-    """60% of the last working weight, 2 x 10."""
+    """60% of the last working weight, 2 x 10. Bodyweight/no-load exercises
+    (increment_kg == 0) stay at 0 rather than floating up to the 2.5 kg floor."""
+    loaded = exercise["increment_kg"] > 0
     sessions = recent_sessions(db, exercise["id"], exclude_workout_id, limit=1)
-    base = sessions[0]["sets"][-1][0] if sessions else BAR_KG
-    weight = max(round_loadable(base * 0.6, exercise["display_unit"]), 2.5)
+    base = sessions[0]["sets"][-1][0] if sessions else (BAR_KG if loaded else 0.0)
+    floor = 2.5 if loaded else 0.0
+    weight = max(round_loadable(base * 0.6, exercise["display_unit"]), floor)
     return {"weight_kg": weight, "reps": 10, "kind": "deload"}
 
 

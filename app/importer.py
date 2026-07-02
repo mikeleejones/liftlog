@@ -128,9 +128,11 @@ def _validate_exercise(ex, where):
     if not isinstance(rep_min, int) or not isinstance(rep_max, int) \
             or rep_min < 1 or rep_min > rep_max:
         errors.append(f"{where}: rep_min/rep_max must be integers with rep_min <= rep_max")
-    for field, kind in (("rest_seconds", int), ("increment_kg", (int, float))):
-        if field in ex and (not isinstance(ex[field], kind) or ex[field] <= 0):
-            errors.append(f"{where}: {field} must be a positive number")
+    if "rest_seconds" in ex and (not isinstance(ex["rest_seconds"], int) or ex["rest_seconds"] <= 0):
+        errors.append(f"{where}: rest_seconds must be a positive integer")
+    # increment_kg may be 0 for bodyweight / no-load exercises (no progression step)
+    if "increment_kg" in ex and (not isinstance(ex["increment_kg"], (int, float)) or ex["increment_kg"] < 0):
+        errors.append(f"{where}: increment_kg must be zero or a positive number")
     return errors
 
 
