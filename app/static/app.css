@@ -84,7 +84,7 @@ body {
 .btn-primary {
   display: block;
   width: 100%;
-  height: 52px;
+  height: 56px;
   margin-top: 16px;
   border: none;
   border-radius: 10px;
@@ -95,7 +95,7 @@ body {
   color: var(--bg);
   cursor: pointer;
 }
-.btn-link { line-height: 52px; text-align: center; text-decoration: none; }
+.btn-link { line-height: 56px; text-align: center; text-decoration: none; }
 .accent-cyan   { background: var(--cyan); }
 .accent-gold   { background: var(--gold); }
 .accent-green  { background: var(--green); }
@@ -104,9 +104,9 @@ body {
 .btn-danger {
   display: block;
   width: 100%;
-  height: 52px;
+  height: 56px;
   margin-top: 12px;
-  background: none;
+  background: var(--surface);
   border: 1px solid var(--red);
   border-radius: 10px;
   color: var(--red);
@@ -116,14 +116,22 @@ body {
   cursor: pointer;
 }
 
+/* secondary/tertiary button: bordered pill with fill (never bare text) */
 .btn-quiet {
-  background: none;
-  border: none;
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
   font-size: 13px;
-  padding: 8px 12px;
+  padding: 8px 14px;
   cursor: pointer;
 }
+.btn-quiet:active { border-color: var(--muted); }
+.btn-quiet.danger { color: var(--red); border-color: var(--red); }
 
 /* header */
 .app-header { padding: 8px 0 4px; }
@@ -135,9 +143,19 @@ body {
   align-items: flex-start;
   justify-content: space-between;
 }
-.nav-links { font-size: 13px; color: var(--muted); padding-top: 2px; }
-.nav-links a { color: var(--muted); text-decoration: none; }
-.nav-links a:active { color: var(--text); }
+.nav-links { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 2px; }
+.nav-links a {
+  font-size: 13px;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+}
+.nav-links a:active { border-color: var(--muted); }
 
 /* routines + import */
 .notice {
@@ -158,6 +176,8 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .routine-line:last-child { border-bottom: none; }
+.routine-line { align-items: center; }
+.routine-line-right { display: flex; align-items: center; gap: 12px; }
 .import-box {
   width: 100%;
   background: var(--card);
@@ -183,7 +203,7 @@ body {
   border-radius: 8px;
   padding: 1px 6px;
 }
-.cancel-link { display: block; text-align: center; margin-top: 8px; }
+.cancel-link { display: flex; width: 100%; margin-top: 8px; }
 
 /* progression + deload */
 .chip {
@@ -197,15 +217,22 @@ body {
 .chip-stall { color: var(--gold); border: 1px solid var(--gold); }
 .deload-banner { border-color: var(--gold); }
 
-.btn-inline {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--muted);
+/* small inline action / video-link chip: bordered pill with fill */
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: var(--text);
   font-size: 13px;
-  text-decoration: underline;
+  text-decoration: none;
   cursor: pointer;
 }
+.link-chip:active { border-color: var(--muted); }
+.exercise-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 .skipped-note { margin-top: 12px; }
 
@@ -284,15 +311,15 @@ body {
 }
 .unit-chip {
   display: inline-block;
-  font-size: 13px;
-  color: var(--muted);
+  font-size: 14px;
+  color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 2px 8px;
-  margin-left: 6px;
+  padding: 6px 10px;
+  margin-left: 8px;
   vertical-align: middle;
   cursor: pointer;
-  background: none;
+  background: var(--card);
   font-family: var(--font-mono);
 }
 
@@ -308,8 +335,8 @@ body {
   padding: 4px;
 }
 .stepper-btn {
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -355,6 +382,7 @@ body {
 }
 .timer-count { font-size: 24px; font-weight: 500; }
 .timer-label { flex: 1; font-size: 13px; }
+.timer-row .btn-quiet { min-height: 36px; padding: 6px 12px; }
 .timer-bar.done .timer-line-fill { background: var(--green); }
 .timer-bar.done .timer-count { color: var(--green); }
 

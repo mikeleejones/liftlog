@@ -98,7 +98,7 @@ A performed session.
 ```sql
 CREATE TABLE workout (
     id           INTEGER PRIMARY KEY,
-    routine_id   INTEGER REFERENCES routine(id),  -- nullable: ad-hoc session
+    routine_id   INTEGER REFERENCES routine(id) ON DELETE SET NULL,  -- nullable: ad-hoc session
     started_at   TEXT NOT NULL,
     finished_at  TEXT,                            -- NULL = in progress / abandoned
     is_deload    INTEGER NOT NULL DEFAULT 0,      -- excluded from stall detection
@@ -109,6 +109,13 @@ CREATE TABLE workout (
 Abandoned-session rule: a workout with `finished_at IS NULL` older than 12h
 is shown as "incomplete" and its sets still count in exercise history, but
 the session doesn't count toward weekly compliance.
+
+Deleting a routine: `routine_id` uses `ON DELETE SET NULL` so a routine can
+be deleted even when it has logged workouts. Those workouts survive with
+`routine_id = NULL` and render as ad-hoc sessions — the same as any unplanned
+workout — so no history is ever lost by deleting a routine. (The routine's
+`routine_exercise` rows cascade-delete; `set_log` history hangs off
+`exercise`, not the routine, so it is untouched.)
 
 ### set_log
 The atomic record. Everything downstream (history, charts, progression,

@@ -250,6 +250,19 @@ def activate_program(request: Request, program_id: int):
     return redirect(request, "/routines")
 
 
+@app.post("/routines/{routine_id}/delete")
+def delete_routine(request: Request, routine_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    # routine_exercise cascades; workout.routine_id is SET NULL, so logged
+    # sessions survive as ad-hoc and no set_log history is lost.
+    db.execute("DELETE FROM routine WHERE id = ?", (routine_id,))
+    db.commit()
+    db.close()
+    return redirect(request, "/routines")
+
+
 def _parse_import(raw: str):
     """Returns (payload, errors). payload is None when unusable."""
     try:

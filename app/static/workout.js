@@ -125,8 +125,11 @@ function render() {
       </div>
       <div class="exercise-cue">${esc(ex.cue)}</div>
       <div class="exercise-target">${ex.target_sets} × ${ex.rep_min}${ex.rep_min === ex.rep_max ? "" : "–" + ex.rep_max}
-        · rest ${ex.rest_seconds}s · <a href="${ytUrl}" target="_blank" rel="noopener">demo</a>
-        ${done ? "" : ` · <button class="btn-inline mono" id="swap-btn" type="button">swap</button>`}</div>
+        · rest ${ex.rest_seconds}s</div>
+      <div class="exercise-actions">
+        <a class="link-chip mono" href="${ytUrl}" target="_blank" rel="noopener">demo</a>
+        ${done ? "" : `<button class="link-chip mono" id="swap-btn" type="button">swap</button>`}
+      </div>
       <div class="done-sets">
         ${ex.sets
           .map(
@@ -149,7 +152,7 @@ function render() {
       <div class="current-set">
         <div class="header-row">
           <div class="section-label current-set-label">${label}</div>
-          ${warmup ? `<button class="btn-inline mono" id="skip-warmups-btn" type="button">skip warmups</button>` : ""}
+          ${warmup ? `<button class="link-chip mono" id="skip-warmups-btn" type="button">skip warmups</button>` : ""}
         </div>
         <div class="big-value">${fmt(pending.weight)}
           <button class="unit-chip" id="unit-chip" type="button">${ex.display_unit}</button>

@@ -6,7 +6,7 @@
     <div class="section-label">programs</div>
     <div class="mono muted card-meta">{{ groups | length }} program{{ '' if groups | length == 1 else 's' }}</div>
   </div>
-  <nav class="mono nav-links"><a href="{{ base }}/">home</a> · <a href="{{ base }}/exercises">exercises</a></nav>
+  <nav class="nav-links"><a href="{{ base }}/">home</a><a href="{{ base }}/exercises">exercises</a></nav>
 </header>
 
 {% if imported %}
@@ -34,9 +34,13 @@
   <div class="section-label week-label">week {{ week.number }}</div>
   {% endif %}
   {% for r in week.routines %}
-  <div class="routine-line mono {{ 'accent-text-' + r.accent if g.program.is_active }}">
-    <span>{{ r.name }}</span>
-    <span class="muted">{{ r.exercise_count }} exercises</span>
+  <div class="routine-line">
+    <span class="mono {{ 'accent-text-' + r.accent if g.program.is_active }}">{{ r.name }}</span>
+    <span class="routine-line-right">
+      <span class="mono muted">{{ r.exercise_count }} exercises</span>
+      <button class="btn-quiet danger mono" type="button"
+              data-del="{{ base }}/routines/{{ r.id }}/delete" data-name="{{ r.name }}">delete</button>
+    </span>
   </div>
   {% endfor %}
   {% endfor %}
@@ -49,9 +53,13 @@
 <div class="section-label sp-top">standalone routines</div>
 <div class="card">
   {% for r in standalone %}
-  <div class="routine-line mono muted">
-    <span>{{ r.name }}</span>
-    <span>{{ r.exercise_count }} exercises</span>
+  <div class="routine-line">
+    <span class="mono">{{ r.name }}</span>
+    <span class="routine-line-right">
+      <span class="mono muted">{{ r.exercise_count }} exercises</span>
+      <button class="btn-quiet danger mono" type="button"
+              data-del="{{ base }}/routines/{{ r.id }}/delete" data-name="{{ r.name }}">delete</button>
+    </span>
   </div>
   {% endfor %}
 </div>
@@ -70,4 +78,36 @@
     <button class="btn-primary accent-violet" type="submit">PREVIEW IMPORT</button>
   </form>
 </div>
+
+<div class="sheet-backdrop" id="del-backdrop" hidden></div>
+<div class="sheet" id="del-sheet" hidden>
+  <div class="sheet-handle"></div>
+  <div class="section-label">delete routine</div>
+  <div class="mono muted card-meta" id="del-summary"></div>
+  <div class="mono muted card-meta">logged workouts are kept as ad-hoc sessions — no history is lost.</div>
+  <form method="post" id="del-form">
+    <button class="btn-danger mono" type="submit">DELETE ROUTINE</button>
+  </form>
+  <button class="btn-quiet mono cancel-link" id="del-cancel" type="button">cancel</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const backdrop = document.getElementById("del-backdrop");
+  const sheet = document.getElementById("del-sheet");
+  const form = document.getElementById("del-form");
+  const summary = document.getElementById("del-summary");
+  function close() { sheet.hidden = true; backdrop.hidden = true; }
+  document.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      form.action = btn.dataset.del;
+      summary.textContent = `delete "${btn.dataset.name}" and its prescription?`;
+      sheet.hidden = false; backdrop.hidden = false;
+    });
+  });
+  backdrop.addEventListener("click", close);
+  document.getElementById("del-cancel").addEventListener("click", close);
+})();
+</script>
 {% endblock %}

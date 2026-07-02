@@ -54,19 +54,31 @@ and fills on small elements only; never large fills, never body text.
 
 ## Components
 
-**Primary action button** ("DID AS SUGGESTED", "START"): full-width, 52px
+**Primary action button** ("DID AS SUGGESTED", "START"): full-width, 56px
 tall, day-accent fill with --bg text, mono, letter-spaced. One per screen
 maximum.
 
-**Stepper**: 44px square tap targets, mono value between, long-press
+**Stepper**: 52px square tap targets, mono value between, long-press
 auto-repeat. Unit chip sits against the value; tapping flips kg/lbs.
+
+**Tappability rule (applies to every interactive element):** anything
+tappable must carry a visible 1px --border AND a --surface or --card
+background fill — never bare colored text, never fully transparent. This
+covers secondary/tertiary buttons (skip, activate, cancel, delete), the
+unit chip, video-link chips, and jump-list row actions. Plain --muted text
+is reserved exclusively for genuinely non-interactive labels (section
+headers, meta like "3×10"), so the visual language itself signals what can
+be tapped. Adjacent tappable elements keep >= 8px of spacing (audited most
+carefully where the stepper meets "DID AS SUGGESTED" on Active Workout).
+Keep it calm — chrome for clarity, not loud colors.
 
 **Exercise card**: the reference page's expandable row (name + mono meta +
 chevron) carries over as the pattern for routine lists and history.
 
 **Rest timer**: full-width bar pinned to the bottom of Active Workout, mono
-countdown, thin progress line draining in the day accent, [skip] as a quiet
-text button. Timer end: green flash + vibration (where supported).
+countdown, thin progress line draining in the day accent, [skip] as a small
+bordered pill button (secondary weight, but unmistakably a button — not a
+bare text link). Timer end: green flash + vibration (where supported).
 
 **Sheets** (jump list, substitution picker): bottom sheets on --surface,
 drag handle, same card idiom inside.

@@ -6,7 +6,7 @@
     <div class="section-label">exercise library</div>
     <div class="mono muted card-meta">{{ exercises | length }} exercise{{ '' if exercises | length == 1 else 's' }}</div>
   </div>
-  <nav class="mono nav-links"><a href="{{ base }}/">home</a> · <a href="{{ base }}/routines">routines</a></nav>
+  <nav class="mono nav-links"><a href="{{ base }}/">home</a><a href="{{ base }}/routines">routines</a></nav>
 </header>
 
 {% for ex in exercises %}

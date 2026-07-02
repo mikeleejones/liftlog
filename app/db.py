@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS exercise (
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS routine_exercise (
 
 CREATE TABLE IF NOT EXISTS workout (
     id           INTEGER PRIMARY KEY,
-    routine_id   INTEGER REFERENCES routine(id),
+    routine_id   INTEGER REFERENCES routine(id) ON DELETE SET NULL,
     started_at   TEXT NOT NULL,
     finished_at  TEXT,
     is_deload    INTEGER NOT NULL DEFAULT 0,
@@ -164,6 +164,7 @@ def init_db():
     now = utcnow()
     if _needs_program_migration(db):
         _migrate_to_programs(db, now)
+    _migrate_workout_routine_ondelete(db)
     db.executescript(SCHEMA)
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     row = db.execute("SELECT id FROM program_state WHERE id = 1").fetchone()
@@ -236,6 +237,40 @@ def _migrate_to_programs(db, now):
         DROP TABLE routine;
         ALTER TABLE routine_new RENAME TO routine;
         ALTER TABLE program_state ADD COLUMN program_week INTEGER NOT NULL DEFAULT 1;
+    """)
+    db.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_workout_routine_ondelete(db):
+    """Rebuild workout so routine_id uses ON DELETE SET NULL, letting a routine
+    be deleted while its logged workouts survive as ad-hoc sessions. Idempotent
+    — inspects the existing FK and returns early once migrated (or on a fresh
+    DB where SCHEMA will create the table correctly)."""
+    has_workout = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workout'"
+    ).fetchone()
+    if not has_workout:
+        return
+    routine_fk = next(
+        (f for f in db.execute("PRAGMA foreign_key_list(workout)") if f["table"] == "routine"),
+        None,
+    )
+    if routine_fk is not None and routine_fk["on_delete"] == "SET NULL":
+        return
+    db.execute("PRAGMA foreign_keys = OFF")
+    db.executescript("""
+        CREATE TABLE workout_new (
+            id           INTEGER PRIMARY KEY,
+            routine_id   INTEGER REFERENCES routine(id) ON DELETE SET NULL,
+            started_at   TEXT NOT NULL,
+            finished_at  TEXT,
+            is_deload    INTEGER NOT NULL DEFAULT 0,
+            note         TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO workout_new (id, routine_id, started_at, finished_at, is_deload, note)
+            SELECT id, routine_id, started_at, finished_at, is_deload, note FROM workout;
+        DROP TABLE workout;
+        ALTER TABLE workout_new RENAME TO workout;
     """)
     db.execute("PRAGMA foreign_keys = ON")
 

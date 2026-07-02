@@ -6,12 +6,14 @@
   <div>
     <div class="section-label">exercise</div>
     <div class="card-title">{{ exercise.name }}</div>
-    <div class="mono muted card-meta">{{ exercise.movement_pattern }} · {{ exercise.muscle_group }}
-      · <a href="https://www.youtube.com/results?search_query={{ youtube_query | urlencode }}"
-           target="_blank" rel="noopener">demo</a></div>
+    <div class="mono muted card-meta">{{ exercise.movement_pattern }} · {{ exercise.muscle_group }}</div>
   </div>
   <nav class="mono nav-links"><a href="{{ base }}/exercises">exercises</a></nav>
 </header>
+<div class="exercise-actions">
+  <a class="link-chip mono" href="https://www.youtube.com/results?search_query={{ youtube_query | urlencode }}"
+     target="_blank" rel="noopener">demo</a>
+</div>
 
 {% if chart %}
 <div class="card chart-card">
