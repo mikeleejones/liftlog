@@ -3,7 +3,7 @@
 {% block content %}
 <div class="login-wrap">
   <div class="section-label">liftlog</div>
-  <form method="post" action="/login" class="login-form">
+  <form method="post" action="{{ base }}/login" class="login-form">
     <input class="secret-input mono" type="password" name="secret" placeholder="secret"
            autocomplete="current-password" autofocus>
     {% if error %}<div class="login-error mono">wrong secret</div>{% endif %}

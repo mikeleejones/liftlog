@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}settings — liftlog{% endblock %}
+{% block content %}
+<header class="app-header header-row">
+  <div class="section-label">settings</div>
+  <nav class="mono nav-links"><a href="{{ base }}/">home</a> · <a href="{{ base }}/progress">progress</a></nav>
+</header>
+
+<div class="section-label sp-top">deload</div>
+<div class="card">
+  {% if deload %}
+  <div class="mono accent-text-gold">deload week active</div>
+  {% elif deload_deferred %}
+  <div class="mono muted">deload deferred — resumes next week</div>
+  {% else %}
+  <div class="mono muted card-meta">{{ 3 - weeks_since_deload if weeks_since_deload < 3 else 0 }} week(s) until next deload</div>
+  {% endif %}
+  <div class="mono muted card-meta">{{ completed_weeks }} completed week(s) · {{ weeks_since_deload }} since last deload</div>
+</div>
+
+<div class="section-label sp-top">data</div>
+<div class="card">
+  <div class="mono muted card-meta">{{ counts.workouts }} workouts · {{ counts.sets }} sets · {{ counts.exercises }} exercises</div>
+  <a class="btn-primary accent-violet btn-link" href="{{ base }}/export">EXPORT JSON</a>
+</div>
+
+<div class="section-label sp-top">secret</div>
+<div class="card">
+  <div class="mono muted card-meta">the shared secret lives in server config (env / .env),
+    never in the database or this app. change it there and restart.</div>
+</div>
+{% endblock %}

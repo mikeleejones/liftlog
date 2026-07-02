@@ -6,7 +6,7 @@
     <div class="section-label">liftlog</div>
     <div class="mono muted week-count">{{ sessions_this_week }} of {{ sessions_required }} sessions this week</div>
   </div>
-  <nav class="mono nav-links"><a href="/routines">routines</a></nav>
+  <nav class="mono nav-links"><a href="{{ base }}/progress">progress</a> · <a href="{{ base }}/routines">routines</a></nav>
 </header>
 
 {% if deload %}
@@ -16,7 +16,7 @@
       <div class="mono accent-text-gold">deload week — weights pre-set</div>
       <div class="mono muted card-meta">60% × 2×10, sessions excluded from progression</div>
     </div>
-    <form method="post" action="/deload/defer">
+    <form method="post" action="{{ base }}/deload/defer">
       <button class="btn-quiet mono" type="submit">defer</button>
     </form>
   </div>
@@ -28,7 +28,7 @@
 {% endif %}
 
 {% if in_progress %}
-<a class="card resume-card accent-border-{{ in_progress_accent }}" href="/workout/{{ in_progress.id }}">
+<a class="card resume-card accent-border-{{ in_progress_accent }}" href="{{ base }}/workout/{{ in_progress.id }}">
   <div class="card-title">{{ in_progress.routine_name or 'ad-hoc session' }}</div>
   <div class="mono muted card-meta">workout in progress — tap to resume</div>
 </a>
@@ -48,7 +48,7 @@
     {% endif %}
   </div>
   <div class="mono muted card-meta">{{ r.exercise_count }} exercises</div>
-  <form method="post" action="/workout/start">
+  <form method="post" action="{{ base }}/workout/start">
     <input type="hidden" name="routine_id" value="{{ r.id }}">
     <button class="btn-primary accent-{{ r.accent }}" type="submit">START</button>
   </form>

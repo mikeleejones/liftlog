@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ exercise.name }} — liftlog{% endblock %}
+{% block shell_class %}shell-wide{% endblock %}
+{% block content %}
+<header class="app-header header-row">
+  <div>
+    <div class="section-label">exercise</div>
+    <div class="card-title">{{ exercise.name }}</div>
+    <div class="mono muted card-meta">{{ exercise.movement_pattern }} · {{ exercise.muscle_group }}
+      · <a href="https://www.youtube.com/results?search_query={{ youtube_query | urlencode }}"
+           target="_blank" rel="noopener">demo</a></div>
+  </div>
+  <nav class="mono nav-links"><a href="{{ base }}/exercises">exercises</a></nav>
+</header>
+
+{% if chart %}
+<div class="card chart-card">
+  <div class="section-label">top set · {{ unit }}</div>
+  {% include "_chart.html" %}
+  <div class="mono muted chart-legend">● PR · dashed = deload</div>
+</div>
+{% else %}
+<div class="card"><div class="mono muted">no history yet</div></div>
+{% endif %}
+
+{% if history %}
+<div class="section-label sp-top">history</div>
+{% for h in history %}
+<div class="card history-row {{ 'accent-border-violet' if h.is_pr }}">
+  <div class="header-row">
+    <div class="mono">{{ h.date }}{% if h.is_deload %} <span class="muted">deload</span>{% endif %}</div>
+    <div class="mono">
+      {%- if h.is_pr %}<span class="chip chip-progress">PR {{ h.top }}</span>
+      {%- else %}<span class="muted">top</span> {{ h.top }} {{ unit }}{% endif %}</div>
+  </div>
+  <div class="mono muted card-meta">{{ h.sets_text }}</div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, catalog, importer, progression
+from . import auth, catalog, charts, exporter, importer, progression
 from .config import SECRET
 from .db import get_db, init_db, run_week_completion, sessions_required, utcnow
 
@@ -18,7 +18,25 @@ if not SECRET:
 APP_DIR = Path(__file__).resolve().parent
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=APP_DIR / "templates")
+
+
+def base_path(request: Request) -> str:
+    """The proxy prefix this app is mounted under (e.g. '/liftlog' when run
+    with uvicorn --root-path /liftlog), or '' when served at the domain root.
+    Every absolute URL sent to the browser must be prefixed with this so it
+    resolves to a path the reverse proxy actually forwards."""
+    return request.scope.get("root_path", "")
+
+
+def redirect(request: Request, path: str, status_code: int = 303) -> RedirectResponse:
+    return RedirectResponse(base_path(request) + path, status_code=status_code)
+
+
+# makes {{ base }} available in every template for href/action/src prefixing
+templates = Jinja2Templates(
+    directory=APP_DIR / "templates",
+    context_processors=[lambda request: {"base": base_path(request)}],
+)
 
 init_db()
 
@@ -29,12 +47,23 @@ def accent_for(routine_name: str) -> str:
     return DAY_ACCENTS.get(routine_name[:3], "violet")
 
 
+KG_PER_LB = 0.45359237
+
+
+def to_display(kg: float, unit: str) -> float:
+    return kg / KG_PER_LB if unit == "lbs" else kg
+
+
+def fmt_weight(kg: float, unit: str) -> str:
+    return f"{round(to_display(kg, unit), 2):g}"
+
+
 def parse_ts(ts: str) -> datetime:
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
-def login_redirect() -> RedirectResponse:
-    return RedirectResponse("/login", status_code=303)
+def login_redirect(request: Request) -> RedirectResponse:
+    return redirect(request, "/login")
 
 
 # ---- auth ----
@@ -42,7 +71,7 @@ def login_redirect() -> RedirectResponse:
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     if auth.is_authed(request):
-        return RedirectResponse("/", status_code=303)
+        return redirect(request, "/")
     return templates.TemplateResponse(request, "login.html", {"error": False})
 
 
@@ -52,10 +81,11 @@ def login(request: Request, secret: str = Form("")):
         return templates.TemplateResponse(
             request, "login.html", {"error": True}, status_code=401
         )
-    resp = RedirectResponse("/", status_code=303)
+    resp = redirect(request, "/")
     resp.set_cookie(
         auth.COOKIE_NAME, auth.cookie_value(),
         max_age=auth.COOKIE_MAX_AGE, httponly=True, samesite="lax",
+        path=base_path(request) or "/",
     )
     return resp
 
@@ -65,7 +95,7 @@ def login(request: Request, secret: str = Form("")):
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     run_week_completion(db)
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
@@ -135,14 +165,14 @@ def home(request: Request):
 @app.post("/deload/defer")
 def defer_deload(request: Request):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     state = db.execute("SELECT week_anchor FROM program_state WHERE id = 1").fetchone()
     until = (parse_ts(state["week_anchor"]) + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     db.execute("UPDATE program_state SET deload_deferred_until = ? WHERE id = 1", (until,))
     db.commit()
     db.close()
-    return RedirectResponse("/", status_code=303)
+    return redirect(request, "/")
 
 
 # ---- routines + import ----
@@ -198,7 +228,7 @@ def _routines_context(db, imported=0, errors=None, raw=""):
 @app.get("/routines", response_class=HTMLResponse)
 def routines_page(request: Request, imported: int = 0):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     context = _routines_context(db, imported=imported)
     db.close()
@@ -208,7 +238,7 @@ def routines_page(request: Request, imported: int = 0):
 @app.post("/programs/{program_id}/activate")
 def activate_program(request: Request, program_id: int):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     program = db.execute("SELECT * FROM program WHERE id = ?", (program_id,)).fetchone()
     if program and not program["is_active"]:
@@ -217,7 +247,7 @@ def activate_program(request: Request, program_id: int):
         db.execute("UPDATE program_state SET program_week = 1 WHERE id = 1")
         db.commit()
     db.close()
-    return RedirectResponse("/routines", status_code=303)
+    return redirect(request, "/routines")
 
 
 def _parse_import(raw: str):
@@ -233,7 +263,7 @@ def _parse_import(raw: str):
 @app.post("/routines/import/preview", response_class=HTMLResponse)
 def import_preview(request: Request, raw: str = Form("")):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     payload, errors = _parse_import(raw)
     if errors:
         db = get_db()
@@ -252,21 +282,21 @@ def import_preview(request: Request, raw: str = Form("")):
 @app.post("/routines/import/apply")
 def import_apply(request: Request, raw: str = Form("")):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     payload, errors = _parse_import(raw)
     if errors:
-        return RedirectResponse("/routines", status_code=303)
+        return redirect(request, "/routines")
     db = get_db()
     importer.apply_import(db, importer.normalize(payload), utcnow())
     db.commit()
     db.close()
-    return RedirectResponse("/routines?imported=1", status_code=303)
+    return redirect(request, "/routines?imported=1")
 
 
 @app.get("/exercises", response_class=HTMLResponse)
 def exercises_page(request: Request):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     exercises = db.execute(
         "SELECT * FROM exercise WHERE is_archived = 0 ORDER BY name COLLATE NOCASE"
@@ -275,12 +305,184 @@ def exercises_page(request: Request):
     return templates.TemplateResponse(request, "exercises.html", {"exercises": exercises})
 
 
+# ---- progress + exercise detail + settings ----
+
+def _exercise_history(db, exercise_id, unit):
+    """Per-workout summary for one exercise (working sets only), oldest first,
+    with top-set weight, volume, date, deload flag, and PR marks. A PR is a
+    top-set weight strictly above every earlier session's top set."""
+    rows = db.execute(
+        "SELECT w.id AS wid, w.started_at, w.is_deload, s.weight_kg, s.reps "
+        "FROM set_log s JOIN workout w ON w.id = s.workout_id "
+        "WHERE s.exercise_id = ? AND s.set_type = 'normal' "
+        "ORDER BY w.started_at, w.id, s.set_number",
+        (exercise_id,),
+    ).fetchall()
+    sessions = []
+    for r in rows:
+        if not sessions or sessions[-1]["wid"] != r["wid"]:
+            sessions.append({
+                "wid": r["wid"], "started_at": r["started_at"],
+                "is_deload": bool(r["is_deload"]), "sets": [], "top_kg": 0.0,
+                "volume_kg": 0.0,
+            })
+        s = sessions[-1]
+        s["sets"].append((r["weight_kg"], r["reps"]))
+        s["top_kg"] = max(s["top_kg"], r["weight_kg"])
+        s["volume_kg"] += r["weight_kg"] * r["reps"]
+    best = 0.0
+    history = []
+    for s in sessions:
+        is_pr = (not s["is_deload"]) and s["top_kg"] > best
+        if is_pr:
+            best = s["top_kg"]
+        history.append({
+            "date": s["started_at"][:10],
+            "is_deload": s["is_deload"],
+            "is_pr": is_pr,
+            "top": fmt_weight(s["top_kg"], unit),
+            "top_kg": s["top_kg"],
+            "sets_text": " · ".join(f"{fmt_weight(w, unit)}×{r}" for w, r in s["sets"]),
+            "volume": f"{round(to_display(s['volume_kg'], unit)):g}",
+        })
+    return history
+
+
+@app.get("/exercise/{exercise_id}", response_class=HTMLResponse)
+def exercise_detail(request: Request, exercise_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    exercise = db.execute("SELECT * FROM exercise WHERE id = ?", (exercise_id,)).fetchone()
+    if exercise is None:
+        db.close()
+        return redirect(request, "/exercises")
+    unit = exercise["display_unit"]
+    history = _exercise_history(db, exercise_id, unit)
+    db.close()
+    chart = charts.line_chart([
+        {"value": to_display(h["top_kg"], unit), "is_pr": h["is_pr"],
+         "is_deload": h["is_deload"], "label": h["date"][5:]}
+        for h in history
+    ])
+    return templates.TemplateResponse(request, "exercise_detail.html", {
+        "exercise": exercise,
+        "unit": unit,
+        "history": list(reversed(history)),
+        "chart": chart,
+        "youtube_query": exercise["youtube_query"],
+    })
+
+
+@app.get("/progress", response_class=HTMLResponse)
+def progress_page(request: Request):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    run_week_completion(db)
+    state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
+    active = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
+    now = utcnow()
+    deload = progression.deload_active(db, now)
+
+    lifts = []
+    if active:
+        rows = db.execute(
+            "SELECT re.target_sets, re.rep_min, re.rep_max, e.* FROM routine_exercise re "
+            "JOIN exercise e ON e.id = re.exercise_id "
+            "JOIN routine r ON r.id = re.routine_id "
+            "WHERE r.program_id = ? AND r.week_number = ? AND r.is_archived = 0 "
+            "ORDER BY r.position, re.position",
+            (active["id"], state["program_week"]),
+        ).fetchall()
+        seen = set()
+        for re in rows:
+            if re["id"] in seen:
+                continue
+            seen.add(re["id"])
+            s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
+            last = db.execute(
+                "SELECT s.weight_kg FROM set_log s JOIN workout w ON w.id = s.workout_id "
+                "WHERE s.exercise_id = ? AND s.set_type = 'normal' AND w.is_deload = 0 "
+                "ORDER BY w.started_at DESC, s.id DESC LIMIT 1",
+                (re["id"],),
+            ).fetchone()
+            lifts.append({
+                "id": re["id"],
+                "name": re["name"],
+                "unit": re["display_unit"],
+                "last": fmt_weight(last["weight_kg"], re["display_unit"]) if last else "—",
+                "suggest": fmt_weight(s["weight_kg"], re["display_unit"]),
+                "kind": s["kind"],
+            })
+
+    # honesty audit (decision 10): share of working sets logged as-suggested
+    audit = db.execute(
+        "SELECT COUNT(*) AS total, COALESCE(SUM(was_suggested), 0) AS suggested "
+        "FROM set_log WHERE set_type = 'normal'"
+    ).fetchone()
+    suggested_pct = round(100 * audit["suggested"] / audit["total"]) if audit["total"] else None
+
+    ready = sum(1 for l in lifts if l["kind"] == "progress")
+    db.close()
+    return templates.TemplateResponse(request, "progress.html", {
+        "program": active,
+        "program_week": state["program_week"],
+        "completed_weeks": state["completed_weeks"],
+        "weeks_since_deload": state["weeks_since_deload"],
+        "deload": deload,
+        "lifts": lifts,
+        "ready": ready,
+        "suggested_pct": suggested_pct,
+        "audit_total": audit["total"],
+    })
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
+    now = utcnow()
+    deload = progression.deload_active(db, now)
+    counts = {
+        "exercises": db.execute("SELECT COUNT(*) FROM exercise").fetchone()[0],
+        "workouts": db.execute(
+            "SELECT COUNT(*) FROM workout WHERE finished_at IS NOT NULL"
+        ).fetchone()[0],
+        "sets": db.execute("SELECT COUNT(*) FROM set_log").fetchone()[0],
+    }
+    db.close()
+    return templates.TemplateResponse(request, "settings.html", {
+        "deload": deload,
+        "weeks_since_deload": state["weeks_since_deload"],
+        "completed_weeks": state["completed_weeks"],
+        "deload_deferred": bool(state["deload_deferred_until"] and state["deload_deferred_until"] > now),
+        "counts": counts,
+    })
+
+
+@app.get("/export")
+def export_json(request: Request):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    data = exporter.export_all(db, utcnow())
+    db.close()
+    stamp = utcnow()[:10]
+    return JSONResponse(
+        data,
+        headers={"Content-Disposition": f'attachment; filename="liftlog-export-{stamp}.json"'},
+    )
+
+
 # ---- workout ----
 
 @app.post("/workout/start")
 def start_workout(request: Request, routine_id: int = Form(...)):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     now = utcnow()
     is_deload = 1 if progression.deload_active(db, now) else 0
@@ -291,7 +493,7 @@ def start_workout(request: Request, routine_id: int = Form(...)):
     db.commit()
     workout_id = cur.lastrowid
     db.close()
-    return RedirectResponse(f"/workout/{workout_id}", status_code=303)
+    return redirect(request, f"/workout/{workout_id}")
 
 
 def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
@@ -344,15 +546,15 @@ def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
 @app.get("/workout/{workout_id}", response_class=HTMLResponse)
 def workout_page(request: Request, workout_id: int):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
     if workout is None:
         db.close()
-        return RedirectResponse("/", status_code=303)
+        return redirect(request, "/")
     if workout["finished_at"]:
         db.close()
-        return RedirectResponse(f"/workout/{workout_id}/summary", status_code=303)
+        return redirect(request, f"/workout/{workout_id}/summary")
     routine = db.execute("SELECT * FROM routine WHERE id = ?", (workout["routine_id"],)).fetchone()
     rows = db.execute(
         "SELECT re.* FROM routine_exercise re WHERE re.routine_id = ? ORDER BY re.position",
@@ -387,6 +589,7 @@ def workout_page(request: Request, workout_id: int):
     routine_name = routine["name"] if routine else "ad-hoc session"
     state = {
         "workout_id": workout_id,
+        "base": base_path(request),
         "routine_name": routine_name,
         "accent": accent_for(routine_name),
         "is_deload": bool(workout["is_deload"]),
@@ -583,19 +786,19 @@ async def set_unit(request: Request, exercise_id: int):
 @app.post("/workout/{workout_id}/discard")
 def discard_workout(request: Request, workout_id: int):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     # only an open workout can be discarded; set_log rows go with it (CASCADE)
     db.execute("DELETE FROM workout WHERE id = ? AND finished_at IS NULL", (workout_id,))
     db.commit()
     db.close()
-    return RedirectResponse("/", status_code=303)
+    return redirect(request, "/")
 
 
 @app.post("/workout/{workout_id}/finish")
 def finish_workout(request: Request, workout_id: int):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     db.execute(
         "UPDATE workout SET finished_at = ? WHERE id = ? AND finished_at IS NULL",
@@ -603,18 +806,18 @@ def finish_workout(request: Request, workout_id: int):
     )
     db.commit()
     db.close()
-    return RedirectResponse(f"/workout/{workout_id}/summary", status_code=303)
+    return redirect(request, f"/workout/{workout_id}/summary")
 
 
 @app.get("/workout/{workout_id}/summary", response_class=HTMLResponse)
 def summary_page(request: Request, workout_id: int):
     if not auth.is_authed(request):
-        return login_redirect()
+        return login_redirect(request)
     db = get_db()
     workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
     if workout is None:
         db.close()
-        return RedirectResponse("/", status_code=303)
+        return redirect(request, "/")
     routine = db.execute("SELECT * FROM routine WHERE id = ?", (workout["routine_id"],)).fetchone()
     rows = db.execute(
         "SELECT s.exercise_id, e.name, e.display_unit, s.weight_kg, s.reps "
@@ -625,7 +828,6 @@ def summary_page(request: Request, workout_id: int):
     ).fetchall()
     db.close()
 
-    KG_PER_LB = 0.45359237
     by_exercise = []
     index = {}
     total_volume_kg = 0.0
@@ -633,13 +835,10 @@ def summary_page(request: Request, workout_id: int):
         total_volume_kg += r["weight_kg"] * r["reps"]
         if r["exercise_id"] not in index:
             index[r["exercise_id"]] = len(by_exercise)
-            by_exercise.append({"name": r["name"], "unit": r["display_unit"], "sets": []})
+            by_exercise.append({"name": r["name"], "unit": r["display_unit"],
+                                "exercise_id": r["exercise_id"], "sets": []})
         entry = by_exercise[index[r["exercise_id"]]]
-        if r["display_unit"] == "lbs":
-            display_weight = r["weight_kg"] / KG_PER_LB
-        else:
-            display_weight = r["weight_kg"]
-        entry["sets"].append(f"{round(display_weight, 2):g} × {r['reps']}")
+        entry["sets"].append(f"{fmt_weight(r['weight_kg'], r['display_unit'])} × {r['reps']}")
 
     duration = None
     if workout["finished_at"]:

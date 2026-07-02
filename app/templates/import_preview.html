@@ -47,9 +47,9 @@
 <div class="mono muted card-meta sp-top">history is never touched — only prescriptions
 change. known exercises get updated cues and tags.</div>
 
-<form method="post" action="/routines/import/apply">
+<form method="post" action="{{ base }}/routines/import/apply">
   <input type="hidden" name="raw" value="{{ raw }}">
   <button class="btn-primary accent-violet" type="submit">IMPORT</button>
 </form>
-<a class="btn-quiet mono cancel-link" href="/routines">cancel</a>
+<a class="btn-quiet mono cancel-link" href="{{ base }}/routines">cancel</a>
 {% endblock %}

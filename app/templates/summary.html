@@ -17,14 +17,14 @@
 
   <div class="section-label sp-top">sets</div>
   {% for ex in exercises %}
-  <div class="card">
+  <a class="card" href="{{ base }}/exercise/{{ ex.exercise_id }}">
     <div class="card-title">{{ ex.name }}</div>
     <div class="mono muted card-meta">{{ ex.sets | join(' · ') }} <span class="unit-suffix">{{ ex.unit }}</span></div>
-  </div>
+  </a>
   {% else %}
   <div class="card"><div class="mono muted">no sets logged</div></div>
   {% endfor %}
 
-  <a class="btn-primary accent-{{ accent }} btn-link sp-top" href="/">HOME</a>
+  <a class="btn-primary accent-{{ accent }} btn-link sp-top" href="{{ base }}/">HOME</a>
 </div>
 {% endblock %}

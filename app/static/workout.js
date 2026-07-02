@@ -2,6 +2,10 @@
 
 const state = JSON.parse(document.getElementById("state").textContent);
 
+// proxy prefix this app is mounted under (e.g. "/liftlog"), "" at domain root.
+// every fetch and navigation must go through it or nginx won't route it.
+const BASE = state.base || "";
+
 const KG_PER_LB = 0.45359237;
 const STEP = { kg: 2.5, lbs: 5 };
 const WARMUP_REST_SECONDS = 60;
@@ -69,7 +73,7 @@ function allDone() {
 }
 
 async function api(path, body) {
-  const res = await fetch(path, {
+  const res = await fetch(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -320,8 +324,8 @@ async function toggleUnit() {
 }
 
 async function finishWorkout() {
-  const res = await fetch(`/workout/${state.workout_id}/finish`, { method: "POST" });
-  if (res.ok) window.location.href = `/workout/${state.workout_id}/summary`;
+  const res = await fetch(`${BASE}/workout/${state.workout_id}/finish`, { method: "POST" });
+  if (res.ok) window.location.href = `${BASE}/workout/${state.workout_id}/summary`;
 }
 
 // ---- rest timer ----
@@ -341,6 +345,7 @@ function startTimer(seconds) {
     if (remaining <= 0) {
       timerBar.classList.add("done");
       timerCount.textContent = "rest done";
+      if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
       clearInterval(timer.interval);
       timer.endTimeout = setTimeout(hideTimer, 4000);
     }
@@ -423,7 +428,7 @@ async function openSubSheet() {
   subSheet.hidden = false;
   backdrop.hidden = false;
   const res = await fetch(
-    `/api/workout/${state.workout_id}/substitutes/${ex.planned_exercise_id}?current=${ex.exercise_id}`
+    `${BASE}/api/workout/${state.workout_id}/substitutes/${ex.planned_exercise_id}?current=${ex.exercise_id}`
   );
   if (!res.ok) {
     list.innerHTML = `<div class="mono muted card-meta">could not load alternatives</div>`;
@@ -501,8 +506,8 @@ function confirmFinish() {
 }
 
 async function discardWorkout() {
-  const res = await fetch(`/workout/${state.workout_id}/discard`, { method: "POST" });
-  if (res.ok) window.location.href = "/";
+  const res = await fetch(`${BASE}/workout/${state.workout_id}/discard`, { method: "POST" });
+  if (res.ok) window.location.href = BASE + "/";
 }
 
 document.getElementById("finish-btn").addEventListener("click", confirmFinish);

@@ -33,6 +33,7 @@ body {
   margin: 0 auto;
   padding: 16px 16px 120px;
 }
+.shell-wide { max-width: 760px; }
 
 .mono { font-family: var(--font-mono); }
 .muted { color: var(--muted); }
@@ -425,3 +426,26 @@ body {
     100% { background: transparent; }
   }
 }
+
+/* charts */
+.chart-card { padding-bottom: 8px; }
+.chart { display: block; margin-top: 12px; overflow: visible; }
+.chart-axis { stroke: var(--border); stroke-width: 1; }
+.chart-line { stroke: var(--violet); stroke-width: 2; fill: none; stroke-linecap: round; }
+.chart-deload { stroke: var(--muted); stroke-dasharray: 4 4; }
+.chart-pr { fill: var(--violet); }
+.chart-label { fill: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.chart-legend { font-size: 11px; margin-top: 4px; }
+
+/* progress + exercise detail */
+.progress-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  font-size: 14px;
+}
+.progress-stats .muted { margin-right: 6px; }
+.lift-row { text-decoration: none; color: var(--text); }
+.lift-name { font-size: 16px; }
+.history-row { margin-top: 8px; }
+.audit-note { margin-top: 4px; color: var(--gold); }

@@ -1,0 +1,20 @@
+<svg class="chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" width="100%"
+     preserveAspectRatio="xMidYMid meet" role="img">
+  <line class="chart-axis" x1="{{ chart.left_x }}" y1="{{ chart.baseline_y }}"
+        x2="{{ chart.right_x }}" y2="{{ chart.baseline_y }}"/>
+  {% for s in chart.segments %}
+  <line class="chart-line{{ ' chart-deload' if s.deload }}"
+        x1="{{ s.x1 }}" y1="{{ s.y1 }}" x2="{{ s.x2 }}" y2="{{ s.y2 }}"/>
+  {% endfor %}
+  {% for d in chart.dots %}
+  <circle class="chart-pr" cx="{{ d.x }}" cy="{{ d.y }}" r="3.5"/>
+  {% endfor %}
+  {% for yl in chart.y_labels %}
+  <text class="chart-label" x="{{ chart.left_x - 6 }}" y="{{ yl.y + 3 }}"
+        text-anchor="end">{{ yl.text }}</text>
+  {% endfor %}
+  {% for xl in chart.x_labels %}
+  <text class="chart-label" x="{{ xl.x }}" y="{{ chart.height - 8 }}"
+        text-anchor="{{ xl.anchor }}">{{ xl.text }}</text>
+  {% endfor %}
+</svg>
