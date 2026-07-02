@@ -22,6 +22,15 @@
     </div>
   </div>
 
+  <div class="sheet" id="finish-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <div class="section-label">workout incomplete</div>
+    <div class="mono muted card-meta" id="finish-summary"></div>
+    <button class="btn-primary accent-{{ accent }} sheet-finish" id="finish-anyway-btn" type="button">FINISH WORKOUT</button>
+    <button class="btn-danger mono" id="finish-discard-btn" type="button">DISCARD WORKOUT</button>
+    <button class="btn-quiet mono cancel-link" id="finish-cancel-btn" type="button">cancel</button>
+  </div>
+
   <div class="timer-bar" id="timer-bar" hidden>
     <div class="timer-line"><div class="timer-line-fill" id="timer-fill"></div></div>
     <div class="timer-row">

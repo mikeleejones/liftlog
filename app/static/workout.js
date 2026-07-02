@@ -340,7 +340,47 @@ function closeSheet() {
 }
 
 document.getElementById("jump-btn").addEventListener("click", openSheet);
-backdrop.addEventListener("click", closeSheet);
-document.getElementById("finish-btn").addEventListener("click", finishWorkout);
+
+// ---- finish confirmation (only when the workout is incomplete) ----
+
+const finishSheet = document.getElementById("finish-sheet");
+
+function confirmFinish() {
+  if (allDone()) {
+    finishWorkout();
+    return;
+  }
+  closeSheet();
+  const done = state.exercises.filter((ex) => ex.sets.length >= ex.target_sets).length;
+  const logged = state.exercises.reduce((n, ex) => n + ex.sets.length, 0);
+  document.getElementById("finish-summary").textContent =
+    `${done} of ${state.exercises.length} exercises done — ` +
+    (logged === 0
+      ? "no sets logged"
+      : logged === 1
+        ? "finish keeps the 1 logged set, discard deletes it"
+        : `finish keeps the ${logged} logged sets, discard deletes them`);
+  finishSheet.hidden = false;
+  backdrop.hidden = false;
+}
+
+function closeFinishSheet() {
+  finishSheet.hidden = true;
+  backdrop.hidden = true;
+}
+
+async function discardWorkout() {
+  const res = await fetch(`/workout/${state.workout_id}/discard`, { method: "POST" });
+  if (res.ok) window.location.href = "/";
+}
+
+document.getElementById("finish-btn").addEventListener("click", confirmFinish);
+document.getElementById("finish-anyway-btn").addEventListener("click", finishWorkout);
+document.getElementById("finish-discard-btn").addEventListener("click", discardWorkout);
+document.getElementById("finish-cancel-btn").addEventListener("click", closeFinishSheet);
+backdrop.addEventListener("click", () => {
+  closeSheet();
+  closeFinishSheet();
+});
 
 render();

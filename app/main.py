@@ -365,6 +365,18 @@ async def set_unit(request: Request, exercise_id: int):
     return {"ok": True}
 
 
+@app.post("/workout/{workout_id}/discard")
+def discard_workout(request: Request, workout_id: int):
+    if not auth.is_authed(request):
+        return login_redirect()
+    db = get_db()
+    # only an open workout can be discarded; set_log rows go with it (CASCADE)
+    db.execute("DELETE FROM workout WHERE id = ? AND finished_at IS NULL", (workout_id,))
+    db.commit()
+    db.close()
+    return RedirectResponse("/", status_code=303)
+
+
 @app.post("/workout/{workout_id}/finish")
 def finish_workout(request: Request, workout_id: int):
     if not auth.is_authed(request):
