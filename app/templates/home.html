@@ -4,7 +4,7 @@
 <header class="app-header header-row">
   <div>
     <div class="section-label">liftlog</div>
-    <div class="mono muted week-count">{{ sessions_this_week }} session{{ '' if sessions_this_week == 1 else 's' }} this week</div>
+    <div class="mono muted week-count">{{ sessions_this_week }} of {{ sessions_required }} sessions this week</div>
   </div>
   <nav class="mono nav-links"><a href="/routines">routines</a></nav>
 </header>
@@ -16,7 +16,11 @@
 </a>
 {% endif %}
 
+{% if program %}
+<div class="section-label sp-top">{{ program.name }}{% if program.weeks_count > 1 %} — week {{ program_week }} of {{ program.weeks_count }}{% endif %}</div>
+{% else %}
 <div class="section-label sp-top">routines</div>
+{% endif %}
 {% for r in routines %}
 <div class="card routine-card accent-border-{{ r.accent }}">
   <div class="card-title">{{ r.name }}</div>

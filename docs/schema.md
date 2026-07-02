@@ -38,17 +38,40 @@ CREATE TABLE exercise (
 Substitution ranking uses: same `movement_pattern` first, then same
 `muscle_group`, tie-broken by "has prior set_log history" then recency.
 
+### program
+A named set of routines spanning one or more weeks, repeated on a weekly
+cycle. Several programs may be stored; exactly one is active at a time
+(app-enforced). The active program's current week (see `program_state`)
+drives Home and weekly compliance.
+
+```sql
+CREATE TABLE program (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    weeks_count INTEGER NOT NULL DEFAULT 1, -- length of the cycle in weeks
+    is_active   INTEGER NOT NULL DEFAULT 0, -- at most one row = 1
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL               -- bumped on re-import
+);
+```
+
 ### routine
 ```sql
 CREATE TABLE routine (
     id          INTEGER PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE,       -- 'Mon - Hinge + Horizontal'
-    position    INTEGER NOT NULL DEFAULT 0, -- display order on Routines screen
+    program_id  INTEGER REFERENCES program(id), -- nullable: standalone routine
+    name        TEXT NOT NULL,                  -- 'Mon - Hinge + Horizontal'
+    week_number INTEGER NOT NULL DEFAULT 1,     -- 1..program.weeks_count
+    position    INTEGER NOT NULL DEFAULT 0,     -- display order within program
     is_archived INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL               -- bumped on re-import (dedupe by name = replace)
+    updated_at  TEXT NOT NULL,                  -- bumped on re-import
+    UNIQUE (program_id, name)                   -- dedupe scope is the program
 );
 ```
+
+Routines dropped by a program re-import are archived (`is_archived = 1`),
+never deleted — `workout.routine_id` may reference them.
 
 ### routine_exercise
 The prescription: what a routine asks for. Replaced wholesale when a routine
@@ -134,17 +157,23 @@ fly so that "defer deload" is a stored decision, not a recomputation.
 ```sql
 CREATE TABLE program_state (
     id                     INTEGER PRIMARY KEY CHECK (id = 1),
-    completed_weeks        INTEGER NOT NULL DEFAULT 0,  -- weeks with 3 finished sessions
+    completed_weeks        INTEGER NOT NULL DEFAULT 0,  -- weeks with all prescribed sessions finished
     weeks_since_deload     INTEGER NOT NULL DEFAULT 0,
     deload_deferred_until  TEXT,                        -- NULL = not deferred
-    week_anchor            TEXT NOT NULL                -- date the current week started
+    week_anchor            TEXT NOT NULL,               -- date the current week started
+    program_week           INTEGER NOT NULL DEFAULT 1   -- current week within the active program's cycle
 );
 ```
 
 Week completion job (runs on each app load): if `week_anchor` + 7 days has
-passed, count finished non-deload workouts in that window; if >= 3, increment
-both counters; roll `week_anchor` forward. `weeks_since_deload >= 3` triggers
-the deload banner for the next week (making deload every 4th completed week).
+passed, count finished non-deload workouts in that window. The required count
+is the number of unarchived routines in the active program's current week
+(`program_week`), or 3 if there is no active program. If met: increment both
+counters and advance `program_week` (wrapping at `weeks_count`); an
+incomplete week repeats its `program_week`. Roll `week_anchor` forward either
+way. `weeks_since_deload >= 3` triggers the deload banner for the next week
+(making deload every 4th completed week). Activating a different program
+resets `program_week` to 1.
 
 ---
 
@@ -169,36 +198,58 @@ Store kg. Render and step in `exercise.display_unit`: stepper = 2.5 kg or
 rounded value converts back to kg for storage. Tapping the unit chip on the
 Active Workout screen updates `exercise.display_unit` persistently.
 
-## Claude import format (v1)
+## Claude import format
+
+### v2 (current) — program envelope
 
 ```json
 {
-  "version": 1,
-  "routines": [
-    {
-      "name": "Mon - Hinge + Horizontal",
-      "exercises": [
-        {
-          "name": "Romanian Deadlift",
-          "cue": "Hinge at hips, soft knees, neutral spine.",
-          "youtube_query": "romanian deadlift form",
-          "movement_pattern": "hinge",
-          "muscle_group": "legs",
-          "sets": 3, "rep_min": 8, "rep_max": 10,
-          "rest_seconds": 120,
-          "increment_kg": 2.5,
-          "is_primary": true
-        }
-      ]
-    }
-  ]
+  "version": 2,
+  "program": {
+    "name": "Hypertrophy Block A",
+    "weeks": 2,
+    "routines": [
+      {
+        "name": "Mon - Hinge + Horizontal",
+        "week": 1,
+        "exercises": [
+          {
+            "name": "Romanian Deadlift",
+            "cue": "Hinge at hips, soft knees, neutral spine.",
+            "youtube_query": "romanian deadlift form",
+            "movement_pattern": "hinge",
+            "muscle_group": "legs",
+            "sets": 3, "rep_min": 8, "rep_max": 10,
+            "rest_seconds": 120,
+            "increment_kg": 2.5,
+            "is_primary": true
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
-Import semantics: routine matched by name -> replace its routine_exercise
-rows; exercise matched by name (case-insensitive) -> update cue/query/tags,
-never touch history; unknown exercise -> create. Full-database export is the
-same shape plus `workouts`, `set_logs`, `substitutions`, `program_state`.
+`week` is optional (default 1); `weeks` is optional (default: highest `week`
+used). Semantics: program matched by name -> replace (routines matched by
+name within the program get their routine_exercise rows replaced; routines
+absent from the import are archived); unknown program -> create. The imported
+program becomes active. Re-importing the already-active program keeps
+`program_week` (clamped to the new `weeks`); activating a different program
+resets it to 1.
+
+### v1 (still accepted) — bare routines
+
+Same shape without the program envelope: `{"version": 1, "routines": [...]}`.
+Routines are upserted into the active program at week 1 (an active program is
+created if none exists); nothing is archived.
+
+### Shared exercise semantics
+
+Exercise matched by name (case-insensitive) -> update cue/query/tags, never
+touch history; unknown exercise -> create. Full-database export is the same
+shape plus `workouts`, `set_logs`, `substitutions`, `program_state`.
 
 ## Non-goals encoded in this schema
 

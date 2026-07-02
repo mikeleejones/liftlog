@@ -3,8 +3,8 @@
 {% block content %}
 <header class="app-header header-row">
   <div>
-    <div class="section-label">routines</div>
-    <div class="mono muted card-meta">{{ cards | length }} routine{{ '' if cards | length == 1 else 's' }}</div>
+    <div class="section-label">programs</div>
+    <div class="mono muted card-meta">{{ groups | length }} program{{ '' if groups | length == 1 else 's' }}</div>
   </div>
   <nav class="mono nav-links"><a href="/">home</a> · <a href="/exercises">exercises</a></nav>
 </header>
@@ -13,27 +13,55 @@
 <div class="notice mono">import applied</div>
 {% endif %}
 
-{% for c in cards %}
-<div class="card accent-border-{{ c.accent }}">
-  <div class="card-title">{{ c.routine.name }}</div>
-  <div class="routine-lines mono muted">
-    {% for ex in c.exercises %}
-    <div class="routine-line">
-      <span>{{ ex.name }}</span>
-      <span>{{ ex.target_sets }} × {{ ex.rep_min }}–{{ ex.rep_max }}</span>
+{% for g in groups %}
+<div class="card program-card {{ 'program-active' if g.program.is_active }}">
+  <div class="header-row">
+    <div>
+      <div class="card-title">{{ g.program.name }}</div>
+      <div class="mono muted card-meta">
+        {%- if g.program.is_active %}active
+          {%- if g.program.weeks_count > 1 %} — week {{ g.current_week }} of {{ g.program.weeks_count }}{% endif %}
+        {%- else %}{{ g.program.weeks_count }} week cycle{% endif %}</div>
     </div>
-    {% endfor %}
+    {% if not g.program.is_active %}
+    <form method="post" action="/programs/{{ g.program.id }}/activate">
+      <button class="btn-quiet mono" type="submit">activate</button>
+    </form>
+    {% endif %}
   </div>
+  {% for week in g.weeks %}
+  {% if g.program.weeks_count > 1 %}
+  <div class="section-label week-label">week {{ week.number }}</div>
+  {% endif %}
+  {% for r in week.routines %}
+  <div class="routine-line mono {{ 'accent-text-' + r.accent if g.program.is_active }}">
+    <span>{{ r.name }}</span>
+    <span class="muted">{{ r.exercise_count }} exercises</span>
+  </div>
+  {% endfor %}
+  {% endfor %}
 </div>
 {% else %}
-<div class="card"><div class="mono muted">no routines — paste an import below</div></div>
+<div class="card"><div class="mono muted">no programs — paste an import below</div></div>
 {% endfor %}
+
+{% if standalone %}
+<div class="section-label sp-top">standalone routines</div>
+<div class="card">
+  {% for r in standalone %}
+  <div class="routine-line mono muted">
+    <span>{{ r.name }}</span>
+    <span>{{ r.exercise_count }} exercises</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="section-label sp-top">import</div>
 <div class="card">
   <form method="post" action="/routines/import/preview">
     <textarea class="import-box mono" name="raw" rows="8" spellcheck="false"
-      placeholder='paste routine JSON from claude.ai ({"version": 1, "routines": [...]})'>{{ raw }}</textarea>
+      placeholder='paste program JSON from claude.ai ({"version": 2, "program": {...}})'>{{ raw }}</textarea>
     {% if errors %}
     <div class="import-errors mono">
       {% for e in errors %}<div>{{ e }}</div>{% endfor %}

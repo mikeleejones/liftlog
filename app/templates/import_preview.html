@@ -6,11 +6,21 @@
   <div class="mono muted card-meta">nothing is saved until you confirm</div>
 </header>
 
-{% for r in plan %}
+<div class="card">
+  <div class="card-title">{{ plan.program.name }}</div>
+  <div class="mono card-meta {{ 'import-replace' if plan.program.action == 'replace' else 'import-create' }}">
+    {%- if plan.program.action == 'replace' %}replaces existing program — becomes active
+    {%- elif plan.program.action == 'create' %}new program — becomes active
+    {%- else %}routines added to this program{% endif %}
+    {%- if plan.program.weeks > 1 %} · {{ plan.program.weeks }} week cycle{% endif %}</div>
+</div>
+
+{% for r in plan.routines %}
 <div class="card">
   <div class="card-title">{{ r.name }}</div>
   <div class="mono card-meta {{ 'import-replace' if r.action == 'replace' else 'import-create' }}">
-    {{ 'replaces existing routine' if r.action == 'replace' else 'new routine' }}</div>
+    {{ 'replaces existing routine' if r.action == 'replace' else 'new routine' }}
+    {%- if plan.program.weeks > 1 %} · week {{ r.week }}{% endif %}</div>
   <div class="routine-lines mono muted">
     {% for ex in r.exercises %}
     <div class="routine-line">
@@ -23,8 +33,19 @@
 </div>
 {% endfor %}
 
-<div class="mono muted card-meta sp-top">re-imported routines keep their history —
-only the prescription is replaced. known exercises get updated cues and tags.</div>
+{% if plan.archived %}
+<div class="card">
+  <div class="mono card-meta import-archive">no longer in the program — will be archived:</div>
+  <div class="routine-lines mono muted">
+    {% for name in plan.archived %}
+    <div class="routine-line"><span>{{ name }}</span></div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="mono muted card-meta sp-top">history is never touched — only prescriptions
+change. known exercises get updated cues and tags.</div>
 
 <form method="post" action="/routines/import/apply">
   <input type="hidden" name="raw" value="{{ raw }}">

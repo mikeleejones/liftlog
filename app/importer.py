@@ -1,8 +1,12 @@
-"""Claude JSON import (format v1) — validation, preview plan, and apply.
+"""Claude JSON import (v1 bare routines, v2 program envelope) — validation,
+preview plan, and apply.
 
-Dedupe semantics per docs/schema.md: routine matched by name -> replace its
-routine_exercise rows; exercise matched by name (case-insensitive) -> update
-cue/query/tags, never touch history; unknown exercise -> create.
+Semantics per docs/schema.md: v2 program matched by name -> replace (routines
+matched by name within the program get their prescription replaced; routines
+absent from the import are archived) and the program becomes active. v1
+routines are upserted into the active program at week 1, nothing archived.
+Exercises always: match by name case-insensitively -> update cue/query/tags,
+never touch history; unknown -> create.
 """
 
 MOVEMENT_PATTERNS = {
@@ -19,18 +23,65 @@ EXERCISE_DEFAULTS = {
     "is_primary": False,
 }
 
+FALLBACK_PROGRAM_NAME = "current program"
+
+
+def normalize(payload):
+    """Convert a valid v1 or v2 payload into one shape:
+    {"program": {"name", "weeks"} | None, "routines": [{name, week, exercises}]}
+    """
+    if payload["version"] == 1:
+        return {
+            "program": None,
+            "routines": [
+                {"name": r["name"].strip(), "week": 1, "exercises": r["exercises"]}
+                for r in payload["routines"]
+            ],
+        }
+    program = payload["program"]
+    routines = [
+        {"name": r["name"].strip(), "week": r.get("week", 1), "exercises": r["exercises"]}
+        for r in program["routines"]
+    ]
+    weeks = program.get("weeks", max(r["week"] for r in routines))
+    return {
+        "program": {"name": program["name"].strip(), "weeks": weeks},
+        "routines": routines,
+    }
+
 
 def validate(payload):
     """Return a list of human-readable problems; empty list = importable."""
-    errors = []
     if not isinstance(payload, dict):
         return ["top level must be a JSON object"]
-    if payload.get("version") != 1:
-        errors.append("version must be 1")
-    routines = payload.get("routines")
+    version = payload.get("version")
+    if version == 1:
+        return _validate_routines(payload.get("routines"), max_week=1)
+    if version == 2:
+        return _validate_program(payload.get("program"))
+    return ["version must be 1 or 2"]
+
+
+def _validate_program(program):
+    if not isinstance(program, dict):
+        return ["program must be an object"]
+    errors = []
+    name = program.get("name")
+    if not isinstance(name, str) or not name.strip():
+        errors.append("program: missing name")
+    weeks = program.get("weeks", 1)
+    if not isinstance(weeks, int) or weeks < 1:
+        errors.append("program: weeks must be a positive integer")
+        weeks = None
+    errors.extend(_validate_routines(program.get("routines"), max_week=weeks))
+    return errors
+
+
+def _validate_routines(routines, max_week):
     if not isinstance(routines, list) or not routines:
-        return errors + ["routines must be a non-empty list"]
-    seen_routines = set()
+        return ["routines must be a non-empty list"]
+    errors = []
+    seen = set()
     for i, routine in enumerate(routines):
         where = f"routine {i + 1}"
         if not isinstance(routine, dict):
@@ -41,9 +92,12 @@ def validate(payload):
             errors.append(f"{where}: missing name")
             continue
         where = f"routine '{name}'"
-        if name.lower() in seen_routines:
+        if name.strip().lower() in seen:
             errors.append(f"{where}: duplicate routine name in import")
-        seen_routines.add(name.lower())
+        seen.add(name.strip().lower())
+        week = routine.get("week", 1)
+        if not isinstance(week, int) or week < 1 or (max_week and week > max_week):
+            errors.append(f"{where}: week must be an integer between 1 and weeks")
         exercises = routine.get("exercises")
         if not isinstance(exercises, list) or not exercises:
             errors.append(f"{where}: exercises must be a non-empty list")
@@ -87,12 +141,27 @@ def _with_defaults(ex):
     return merged
 
 
-def plan(db, payload):
+def _target_program(db, norm):
+    """(program_row_or_None, display_name). For v1 the target is the active
+    program, which may not exist yet."""
+    if norm["program"]:
+        row = db.execute(
+            "SELECT * FROM program WHERE name = ?", (norm["program"]["name"],)
+        ).fetchone()
+        return row, norm["program"]["name"]
+    row = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
+    return row, (row["name"] if row else FALLBACK_PROGRAM_NAME)
+
+
+def plan(db, norm):
     """Human-readable preview of what apply() will do. Read-only."""
+    program_row, program_name = _target_program(db, norm)
+    is_v2 = norm["program"] is not None
     routines = []
-    for routine in payload["routines"]:
-        existing = db.execute(
-            "SELECT id FROM routine WHERE name = ?", (routine["name"].strip(),)
+    for routine in norm["routines"]:
+        existing = program_row and db.execute(
+            "SELECT id FROM routine WHERE program_id = ? AND name = ?",
+            (program_row["id"], routine["name"]),
         ).fetchone()
         exercises = []
         for ex in routine["exercises"]:
@@ -109,39 +178,107 @@ def plan(db, payload):
                 "is_primary": bool(ex["is_primary"]),
             })
         routines.append({
-            "name": routine["name"].strip(),
+            "name": routine["name"],
+            "week": routine["week"],
             "action": "replace" if existing else "create",
             "exercises": exercises,
         })
-    return routines
+    archived = []
+    if is_v2 and program_row:
+        imported_names = {r["name"] for r in norm["routines"]}
+        for row in db.execute(
+            "SELECT name FROM routine WHERE program_id = ? AND is_archived = 0",
+            (program_row["id"],),
+        ):
+            if row["name"] not in imported_names:
+                archived.append(row["name"])
+    return {
+        "program": {
+            "name": program_name,
+            "weeks": norm["program"]["weeks"] if is_v2 else (
+                program_row["weeks_count"] if program_row else 1),
+            "action": ("replace" if program_row else "create") if is_v2 else "into",
+        },
+        "routines": routines,
+        "archived": archived,
+    }
 
 
-def apply_import(db, payload, now):
+def apply_import(db, norm, now):
     """Write the import. Caller commits."""
-    for routine in payload["routines"]:
-        name = routine["name"].strip()
-        existing = db.execute("SELECT id FROM routine WHERE name = ?", (name,)).fetchone()
+    program_row, program_name = _target_program(db, norm)
+    is_v2 = norm["program"] is not None
+
+    if program_row is None:
+        weeks = norm["program"]["weeks"] if is_v2 else 1
+        program_id = db.execute(
+            "INSERT INTO program (name, weeks_count, is_active, created_at, updated_at) "
+            "VALUES (?, ?, 0, ?, ?)",
+            (program_name, weeks, now, now),
+        ).lastrowid
+    else:
+        program_id = program_row["id"]
+        if is_v2:
+            db.execute(
+                "UPDATE program SET weeks_count = ?, updated_at = ? WHERE id = ?",
+                (norm["program"]["weeks"], now, program_id),
+            )
+
+    if is_v2 or program_row is None:
+        _activate(db, program_id, was_active=bool(program_row and program_row["is_active"]))
+
+    for pos, routine in enumerate(norm["routines"]):
+        existing = db.execute(
+            "SELECT id FROM routine WHERE program_id = ? AND name = ?",
+            (program_id, routine["name"]),
+        ).fetchone()
         if existing:
             routine_id = existing["id"]
-            db.execute("UPDATE routine SET updated_at = ? WHERE id = ?", (now, routine_id))
+            db.execute(
+                "UPDATE routine SET week_number = ?, position = ?, is_archived = 0, "
+                "updated_at = ? WHERE id = ?",
+                (routine["week"], pos, now, routine_id),
+            )
             db.execute("DELETE FROM routine_exercise WHERE routine_id = ?", (routine_id,))
         else:
-            position = db.execute(
-                "SELECT COALESCE(MAX(position), -1) + 1 FROM routine"
-            ).fetchone()[0]
             routine_id = db.execute(
-                "INSERT INTO routine (name, position, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (name, position, now, now),
+                "INSERT INTO routine (program_id, name, week_number, position, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (program_id, routine["name"], routine["week"], pos, now, now),
             ).lastrowid
-        for pos, ex in enumerate(routine["exercises"]):
+        for ex_pos, ex in enumerate(routine["exercises"]):
             ex = _with_defaults(ex)
             exercise_id = _upsert_exercise(db, ex, now)
             db.execute(
                 "INSERT INTO routine_exercise (routine_id, exercise_id, position, target_sets, "
                 "rep_min, rep_max, rest_seconds, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (routine_id, exercise_id, pos, ex["sets"], ex["rep_min"], ex["rep_max"],
+                (routine_id, exercise_id, ex_pos, ex["sets"], ex["rep_min"], ex["rep_max"],
                  ex["rest_seconds"], 1 if ex["is_primary"] else 0),
             )
+
+    if is_v2:
+        imported_names = {r["name"] for r in norm["routines"]}
+        for row in db.execute(
+            "SELECT id, name FROM routine WHERE program_id = ? AND is_archived = 0",
+            (program_id,),
+        ).fetchall():
+            if row["name"] not in imported_names:
+                db.execute(
+                    "UPDATE routine SET is_archived = 1, updated_at = ? WHERE id = ?",
+                    (now, row["id"]),
+                )
+        # keep program_week valid if the cycle shrank
+        db.execute(
+            "UPDATE program_state SET program_week = 1 WHERE id = 1 AND program_week > ?",
+            (norm["program"]["weeks"],),
+        )
+
+
+def _activate(db, program_id, was_active):
+    db.execute("UPDATE program SET is_active = 0 WHERE id != ?", (program_id,))
+    db.execute("UPDATE program SET is_active = 1 WHERE id = ?", (program_id,))
+    if not was_active:
+        db.execute("UPDATE program_state SET program_week = 1 WHERE id = 1")
 
 
 def _upsert_exercise(db, ex, now):

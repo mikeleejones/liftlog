@@ -157,6 +157,9 @@ body {
 .import-errors { color: var(--red); font-size: 13px; margin-top: 8px; }
 .import-create { color: var(--green); }
 .import-replace { color: var(--gold); }
+.import-archive { color: var(--red); }
+.program-card.program-active { border-color: var(--violet); }
+.week-label { margin-top: 12px; }
 .import-primary {
   font-size: 11px;
   color: var(--muted);

@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 from .config import DB_PATH
 
+SCHEMA_VERSION = 1
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS exercise (
     id               INTEGER PRIMARY KEY,
@@ -18,13 +20,25 @@ CREATE TABLE IF NOT EXISTS exercise (
     created_at       TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS routine (
+CREATE TABLE IF NOT EXISTS program (
     id          INTEGER PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
+    weeks_count INTEGER NOT NULL DEFAULT 1,
+    is_active   INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS routine (
+    id          INTEGER PRIMARY KEY,
+    program_id  INTEGER REFERENCES program(id),
+    name        TEXT NOT NULL,
+    week_number INTEGER NOT NULL DEFAULT 1,
     position    INTEGER NOT NULL DEFAULT 0,
     is_archived INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    UNIQUE (program_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS routine_exercise (
@@ -76,7 +90,8 @@ CREATE TABLE IF NOT EXISTS program_state (
     completed_weeks        INTEGER NOT NULL DEFAULT 0,
     weeks_since_deload     INTEGER NOT NULL DEFAULT 0,
     deload_deferred_until  TEXT,
-    week_anchor            TEXT NOT NULL
+    week_anchor            TEXT NOT NULL,
+    program_week           INTEGER NOT NULL DEFAULT 1
 );
 """
 
@@ -146,8 +161,11 @@ def get_db() -> sqlite3.Connection:
 
 def init_db():
     db = get_db()
-    db.executescript(SCHEMA)
     now = utcnow()
+    if _needs_program_migration(db):
+        _migrate_to_programs(db, now)
+    db.executescript(SCHEMA)
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     row = db.execute("SELECT id FROM program_state WHERE id = 1").fetchone()
     if row is None:
         db.execute(
@@ -161,10 +179,77 @@ def init_db():
     db.close()
 
 
+def _needs_program_migration(db):
+    """True for a pre-v0.2.5 database: routine table exists without program_id."""
+    if db.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
+        return False
+    has_routine = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'routine'"
+    ).fetchone()
+    if not has_routine:
+        return False
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(routine)")}
+    return "program_id" not in columns
+
+
+def _migrate_to_programs(db, now):
+    """Rebuild routine with program scoping; wrap existing routines in an
+    active 'current program' so weekly compliance keeps working."""
+    db.execute("PRAGMA foreign_keys = OFF")
+    db.executescript("""
+        CREATE TABLE program (
+            id          INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL UNIQUE,
+            weeks_count INTEGER NOT NULL DEFAULT 1,
+            is_active   INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+    """)
+    program_id = None
+    if db.execute("SELECT COUNT(*) FROM routine").fetchone()[0] > 0:
+        program_id = db.execute(
+            "INSERT INTO program (name, weeks_count, is_active, created_at, updated_at) "
+            "VALUES ('current program', 1, 1, ?, ?)",
+            (now, now),
+        ).lastrowid
+    db.executescript("""
+        CREATE TABLE routine_new (
+            id          INTEGER PRIMARY KEY,
+            program_id  INTEGER REFERENCES program(id),
+            name        TEXT NOT NULL,
+            week_number INTEGER NOT NULL DEFAULT 1,
+            position    INTEGER NOT NULL DEFAULT 0,
+            is_archived INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            UNIQUE (program_id, name)
+        );
+    """)
+    db.execute(
+        "INSERT INTO routine_new (id, program_id, name, week_number, position, is_archived, "
+        "created_at, updated_at) SELECT id, ?, name, 1, position, is_archived, created_at, "
+        "updated_at FROM routine",
+        (program_id,),
+    )
+    db.executescript("""
+        DROP TABLE routine;
+        ALTER TABLE routine_new RENAME TO routine;
+        ALTER TABLE program_state ADD COLUMN program_week INTEGER NOT NULL DEFAULT 1;
+    """)
+    db.execute("PRAGMA foreign_keys = ON")
+
+
 def _seed(db, now):
+    program_id = db.execute(
+        "INSERT INTO program (name, weeks_count, is_active, created_at, updated_at) "
+        "VALUES ('starter', 1, 1, ?, ?)",
+        (now, now),
+    ).lastrowid
     cur = db.execute(
-        "INSERT INTO routine (name, position, created_at, updated_at) VALUES (?, 0, ?, ?)",
-        (SEED_ROUTINE["name"], now, now),
+        "INSERT INTO routine (program_id, name, week_number, position, created_at, updated_at) "
+        "VALUES (?, ?, 1, 0, ?, ?)",
+        (program_id, SEED_ROUTINE["name"], now, now),
     )
     routine_id = cur.lastrowid
     for pos, ex in enumerate(SEED_ROUTINE["exercises"]):
@@ -182,14 +267,30 @@ def _seed(db, now):
         )
 
 
+def sessions_required(db, program_week):
+    """Prescribed sessions for the active program's given week; 3 if no
+    active program (per docs/schema.md)."""
+    active = db.execute("SELECT id FROM program WHERE is_active = 1").fetchone()
+    if active is None:
+        return 3, None
+    count = db.execute(
+        "SELECT COUNT(*) FROM routine WHERE program_id = ? AND week_number = ? "
+        "AND is_archived = 0",
+        (active["id"], program_week),
+    ).fetchone()[0]
+    return (count if count > 0 else 3), active["id"]
+
+
 def run_week_completion(db):
     """Per docs/schema.md: on app load, roll week_anchor forward one week at a
-    time, crediting weeks that had >= 3 finished non-deload workouts."""
+    time. A week completes when all sessions prescribed by the active program
+    week are finished; program_week advances (wrapping) only on completion."""
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
     anchor = datetime.strptime(state["week_anchor"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     completed = state["completed_weeks"]
     since_deload = state["weeks_since_deload"]
+    program_week = state["program_week"]
     changed = False
     while anchor + timedelta(days=7) <= now:
         window_end = anchor + timedelta(days=7)
@@ -198,15 +299,21 @@ def run_week_completion(db):
             "AND started_at >= ? AND started_at < ?",
             (anchor.strftime("%Y-%m-%dT%H:%M:%SZ"), window_end.strftime("%Y-%m-%dT%H:%M:%SZ")),
         ).fetchone()[0]
-        if count >= 3:
+        required, program_id = sessions_required(db, program_week)
+        if count >= required:
             completed += 1
             since_deload += 1
+            if program_id is not None:
+                weeks_count = db.execute(
+                    "SELECT weeks_count FROM program WHERE id = ?", (program_id,)
+                ).fetchone()[0]
+                program_week = program_week % weeks_count + 1
         anchor = window_end
         changed = True
     if changed:
         db.execute(
-            "UPDATE program_state SET completed_weeks = ?, weeks_since_deload = ?, week_anchor = ? "
-            "WHERE id = 1",
-            (completed, since_deload, anchor.strftime("%Y-%m-%dT%H:%M:%SZ")),
+            "UPDATE program_state SET completed_weeks = ?, weeks_since_deload = ?, "
+            "week_anchor = ?, program_week = ? WHERE id = 1",
+            (completed, since_deload, anchor.strftime("%Y-%m-%dT%H:%M:%SZ"), program_week),
         )
         db.commit()

@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import auth, importer
 from .config import SECRET
-from .db import get_db, init_db, run_week_completion, utcnow
+from .db import get_db, init_db, run_week_completion, sessions_required, utcnow
 
 if not SECRET:
     sys.exit("LIFTLOG_SECRET is not set. Put it in the environment or a .env file, then restart.")
@@ -69,11 +69,22 @@ def home(request: Request):
     db = get_db()
     run_week_completion(db)
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
-    routines = db.execute(
-        "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
-        "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
-        "WHERE r.is_archived = 0 GROUP BY r.id ORDER BY r.position, r.id"
-    ).fetchall()
+    active = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
+    if active:
+        routines = db.execute(
+            "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
+            "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
+            "WHERE r.is_archived = 0 AND r.program_id = ? AND r.week_number = ? "
+            "GROUP BY r.id ORDER BY r.position, r.id",
+            (active["id"], state["program_week"]),
+        ).fetchall()
+    else:
+        routines = db.execute(
+            "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
+            "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
+            "WHERE r.is_archived = 0 GROUP BY r.id ORDER BY r.position, r.id"
+        ).fetchall()
+    required, _ = sessions_required(db, state["program_week"])
     sessions_this_week = db.execute(
         "SELECT COUNT(*) FROM workout WHERE finished_at IS NOT NULL AND started_at >= ?",
         (state["week_anchor"],),
@@ -89,6 +100,9 @@ def home(request: Request):
     return templates.TemplateResponse(request, "home.html", {
         "routines": [dict(r, accent=accent_for(r["name"])) for r in routines],
         "sessions_this_week": sessions_this_week,
+        "sessions_required": required,
+        "program": active,
+        "program_week": state["program_week"],
         "in_progress": in_progress,
         "in_progress_accent": accent_for(in_progress["routine_name"] or "") if in_progress else None,
     })
@@ -96,19 +110,52 @@ def home(request: Request):
 
 # ---- routines + import ----
 
-def _routine_cards(db):
-    routines = db.execute(
-        "SELECT * FROM routine WHERE is_archived = 0 ORDER BY position, id"
+def _program_groups(db):
+    """Programs (active first) with their unarchived routines grouped by week,
+    plus any standalone routines."""
+    groups = []
+    programs = db.execute(
+        "SELECT * FROM program ORDER BY is_active DESC, name"
     ).fetchall()
-    cards = []
-    for r in routines:
-        exercises = db.execute(
-            "SELECT e.name, re.target_sets, re.rep_min, re.rep_max FROM routine_exercise re "
-            "JOIN exercise e ON e.id = re.exercise_id WHERE re.routine_id = ? ORDER BY re.position",
-            (r["id"],),
+    state = db.execute("SELECT program_week FROM program_state WHERE id = 1").fetchone()
+    for p in programs:
+        routines = db.execute(
+            "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
+            "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
+            "WHERE r.program_id = ? AND r.is_archived = 0 "
+            "GROUP BY r.id ORDER BY r.week_number, r.position, r.id",
+            (p["id"],),
         ).fetchall()
-        cards.append({"routine": r, "accent": accent_for(r["name"]), "exercises": exercises})
-    return cards
+        if not routines:
+            continue
+        weeks = []
+        for r in routines:
+            if not weeks or weeks[-1]["number"] != r["week_number"]:
+                weeks.append({"number": r["week_number"], "routines": []})
+            weeks[-1]["routines"].append(dict(r, accent=accent_for(r["name"])))
+        groups.append({
+            "program": p,
+            "weeks": weeks,
+            "current_week": state["program_week"] if p["is_active"] else None,
+        })
+    standalone = db.execute(
+        "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
+        "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
+        "WHERE r.program_id IS NULL AND r.is_archived = 0 "
+        "GROUP BY r.id ORDER BY r.position, r.id"
+    ).fetchall()
+    return groups, [dict(r, accent=accent_for(r["name"])) for r in standalone]
+
+
+def _routines_context(db, imported=0, errors=None, raw=""):
+    groups, standalone = _program_groups(db)
+    return {
+        "groups": groups,
+        "standalone": standalone,
+        "imported": imported,
+        "errors": errors or [],
+        "raw": raw,
+    }
 
 
 @app.get("/routines", response_class=HTMLResponse)
@@ -116,14 +163,24 @@ def routines_page(request: Request, imported: int = 0):
     if not auth.is_authed(request):
         return login_redirect()
     db = get_db()
-    cards = _routine_cards(db)
+    context = _routines_context(db, imported=imported)
     db.close()
-    return templates.TemplateResponse(request, "routines.html", {
-        "cards": cards,
-        "imported": imported,
-        "errors": [],
-        "raw": "",
-    })
+    return templates.TemplateResponse(request, "routines.html", context)
+
+
+@app.post("/programs/{program_id}/activate")
+def activate_program(request: Request, program_id: int):
+    if not auth.is_authed(request):
+        return login_redirect()
+    db = get_db()
+    program = db.execute("SELECT * FROM program WHERE id = ?", (program_id,)).fetchone()
+    if program and not program["is_active"]:
+        db.execute("UPDATE program SET is_active = 0 WHERE id != ?", (program_id,))
+        db.execute("UPDATE program SET is_active = 1 WHERE id = ?", (program_id,))
+        db.execute("UPDATE program_state SET program_week = 1 WHERE id = 1")
+        db.commit()
+    db.close()
+    return RedirectResponse("/routines", status_code=303)
 
 
 def _parse_import(raw: str):
@@ -143,16 +200,11 @@ def import_preview(request: Request, raw: str = Form("")):
     payload, errors = _parse_import(raw)
     if errors:
         db = get_db()
-        cards = _routine_cards(db)
+        context = _routines_context(db, errors=errors, raw=raw)
         db.close()
-        return templates.TemplateResponse(request, "routines.html", {
-            "cards": cards,
-            "imported": 0,
-            "errors": errors,
-            "raw": raw,
-        }, status_code=422)
+        return templates.TemplateResponse(request, "routines.html", context, status_code=422)
     db = get_db()
-    plan = importer.plan(db, payload)
+    plan = importer.plan(db, importer.normalize(payload))
     db.close()
     return templates.TemplateResponse(request, "import_preview.html", {
         "plan": plan,
@@ -168,7 +220,7 @@ def import_apply(request: Request, raw: str = Form("")):
     if errors:
         return RedirectResponse("/routines", status_code=303)
     db = get_db()
-    importer.apply_import(db, payload, utcnow())
+    importer.apply_import(db, importer.normalize(payload), utcnow())
     db.commit()
     db.close()
     return RedirectResponse("/routines?imported=1", status_code=303)

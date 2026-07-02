@@ -32,11 +32,11 @@ or per-set RPE. Do not add these.
 
 ## Binding specs in docs/
 
-- `docs/schema.md` — the complete data model: 7 tables (exercise, routine,
-  routine_exercise, workout, set_log, substitution, program_state), derived-value
-  rules (progression, stall, warmup ramp), unit handling, the Claude JSON import
-  format, and import/dedupe semantics. Implement exactly; do not add tables or
-  columns without amending the doc.
+- `docs/schema.md` — the complete data model: 8 tables (exercise, routine,
+  routine_exercise, workout, set_log, substitution, program, program_state),
+  derived-value rules (progression, stall, warmup ramp), unit handling, the
+  Claude JSON import format, and import/dedupe semantics. Implement exactly;
+  do not add tables or columns without amending the doc.
 - `docs/design-language.md` — color tokens, typography (Inter for prose,
   JetBrains Mono for all numeric/structural text), spacing/radius scale,
   component specs (primary button, stepper, exercise card, rest timer bar,
@@ -70,9 +70,10 @@ chart), Routines + Import (paste JSON with human-readable preview), Progress
 6. Progression: double progression per exercise. All working sets at rep_max
    -> suggest +increment next time. Stall = 3 consecutive non-deload sessions
    at same weight, no total-rep improvement -> suggest 10% reset.
-7. Deload: every 4th COMPLETED training week (3 finished sessions = complete).
-   Pre-fills 60% weights, 2x10. Deferrable. Deload sessions excluded from
-   stall detection. State stored in program_state, not derived.
+7. Deload: every 4th COMPLETED training week (a week is complete when all
+   sessions prescribed by the active program week are finished; 3 if no
+   active program). Pre-fills 60% weights, 2x10. Deferrable. Deload sessions
+   excluded from stall detection. State stored in program_state, not derived.
 8. Warmup ramps auto-suggested for is_primary exercises only:
    bar x10, 50% x6, 75% x3, logged as set_type='warmup', excluded from
    progression math.
@@ -84,6 +85,14 @@ chart), Routines + Import (paste JSON with human-readable preview), Progress
     violet=home/analysis. Green progression chip "↑ 62.5" is the signature
     element.
 12. Interface copy: mono, factual, calm. No exclamation marks, no coach voice.
+13. Programs group routines (added 2026-07-02): a program is a named set of
+    routines spanning one or more weeks, repeated on a weekly cycle. Several
+    programs may be stored; exactly one is active. The active program's
+    current week drives Home and weekly compliance. Import v2 wraps routines
+    in a program envelope and activates the imported program; v1 imports are
+    still accepted and upsert routines into the active program's week 1.
+    Routines dedupe by name within their program, not globally. Routines
+    dropped by a program re-import are archived, never deleted.
 
 ## Build plan — work ONE increment at a time, wait for user testing between
 
@@ -92,6 +101,9 @@ chart), Routines + Import (paste JSON with human-readable preview), Progress
   locally (accessible from iPhone via Mac's LAN IP).
 - v0.2 Import: Routines screen, JSON import with preview + dedupe semantics,
   exercise library view. (After this, routines come from claude.ai.)
+- v0.2.5 Programs: program table grouping routines, multi-week programs,
+  import v2 (program envelope), program activation, weekly compliance derived
+  from the active program week instead of a fixed 3.
 - v0.3 Brains: progression suggestions, stall detection, warmup ramps, deload
   tracking/banner, substitution picker with 3 alternatives.
 - v0.4 Polish: Progress screens with charts, Exercise Detail history, JSON
