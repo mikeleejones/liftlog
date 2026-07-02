@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}liftlog{% endblock %}
+{% block content %}
+<header class="app-header">
+  <div class="section-label">liftlog</div>
+  <div class="mono muted week-count">{{ sessions_this_week }} session{{ '' if sessions_this_week == 1 else 's' }} this week</div>
+</header>
+
+{% if in_progress %}
+<a class="card resume-card accent-border-{{ in_progress_accent }}" href="/workout/{{ in_progress.id }}">
+  <div class="card-title">{{ in_progress.routine_name or 'ad-hoc session' }}</div>
+  <div class="mono muted card-meta">workout in progress — tap to resume</div>
+</a>
+{% endif %}
+
+<div class="section-label sp-top">routines</div>
+{% for r in routines %}
+<div class="card routine-card accent-border-{{ r.accent }}">
+  <div class="card-title">{{ r.name }}</div>
+  <div class="mono muted card-meta">{{ r.exercise_count }} exercises</div>
+  <form method="post" action="/workout/start">
+    <input type="hidden" name="routine_id" value="{{ r.id }}">
+    <button class="btn-primary accent-{{ r.accent }}" type="submit">START</button>
+  </form>
+</div>
+{% endfor %}
+{% endblock %}

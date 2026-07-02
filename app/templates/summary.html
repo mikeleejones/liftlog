@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}summary — liftlog{% endblock %}
+{% block content %}
+<div class="summary reveal">
+  <header class="app-header">
+    <div class="section-label">workout complete</div>
+    <div class="card-title accent-text-{{ accent }}">{{ routine_name }}</div>
+  </header>
+
+  <div class="card">
+    <div class="summary-stats mono">
+      {% if duration %}<div><span class="muted">duration</span> {{ duration }}</div>{% endif %}
+      <div><span class="muted">sets</span> {{ total_sets }}</div>
+      <div><span class="muted">volume</span> {{ total_volume }}</div>
+    </div>
+  </div>
+
+  <div class="section-label sp-top">sets</div>
+  {% for ex in exercises %}
+  <div class="card">
+    <div class="card-title">{{ ex.name }}</div>
+    <div class="mono muted card-meta">{{ ex.sets | join(' · ') }} <span class="unit-suffix">{{ ex.unit }}</span></div>
+  </div>
+  {% else %}
+  <div class="card"><div class="mono muted">no sets logged</div></div>
+  {% endfor %}
+
+  <a class="btn-primary accent-{{ accent }} btn-link sp-top" href="/">HOME</a>
+</div>
+{% endblock %}

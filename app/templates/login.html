@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}liftlog — login{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <div class="section-label">liftlog</div>
+  <form method="post" action="/login" class="login-form">
+    <input class="secret-input mono" type="password" name="secret" placeholder="secret"
+           autocomplete="current-password" autofocus>
+    {% if error %}<div class="login-error mono">wrong secret</div>{% endif %}
+    <button class="btn-primary accent-violet" type="submit">ENTER</button>
+  </form>
+</div>
+{% endblock %}

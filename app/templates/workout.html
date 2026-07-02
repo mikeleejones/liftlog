@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ routine_name }} — liftlog{% endblock %}
+{% block content %}
+<div id="workout-root" class="workout accent-{{ accent }}-ctx">
+  <header class="workout-header accent-border-{{ accent }}">
+    <div>
+      <div class="card-title">{{ routine_name }}</div>
+      <div class="mono muted card-meta" id="workout-progress"></div>
+    </div>
+    <button class="btn-quiet mono" id="jump-btn" type="button">list</button>
+  </header>
+
+  <section id="exercise-view"></section>
+
+  <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+  <div class="sheet" id="jump-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <div class="section-label">exercises</div>
+    <div id="jump-list"></div>
+    <div class="sheet-finish">
+      <button class="btn-primary accent-{{ accent }}" id="finish-btn" type="button">FINISH WORKOUT</button>
+    </div>
+  </div>
+
+  <div class="timer-bar" id="timer-bar" hidden>
+    <div class="timer-line"><div class="timer-line-fill" id="timer-fill"></div></div>
+    <div class="timer-row">
+      <span class="mono timer-count" id="timer-count">0:00</span>
+      <span class="mono muted timer-label">rest</span>
+      <button class="btn-quiet mono" id="timer-skip" type="button">skip</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script id="state" type="application/json">{{ state_json | safe }}</script>
+<script src="/static/workout.js"></script>
+{% endblock %}
