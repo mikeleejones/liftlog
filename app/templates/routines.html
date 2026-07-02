@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}routines — liftlog{% endblock %}
+{% block content %}
+<header class="app-header header-row">
+  <div>
+    <div class="section-label">routines</div>
+    <div class="mono muted card-meta">{{ cards | length }} routine{{ '' if cards | length == 1 else 's' }}</div>
+  </div>
+  <nav class="mono nav-links"><a href="/">home</a> · <a href="/exercises">exercises</a></nav>
+</header>
+
+{% if imported %}
+<div class="notice mono">import applied</div>
+{% endif %}
+
+{% for c in cards %}
+<div class="card accent-border-{{ c.accent }}">
+  <div class="card-title">{{ c.routine.name }}</div>
+  <div class="routine-lines mono muted">
+    {% for ex in c.exercises %}
+    <div class="routine-line">
+      <span>{{ ex.name }}</span>
+      <span>{{ ex.target_sets }} × {{ ex.rep_min }}–{{ ex.rep_max }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="card"><div class="mono muted">no routines — paste an import below</div></div>
+{% endfor %}
+
+<div class="section-label sp-top">import</div>
+<div class="card">
+  <form method="post" action="/routines/import/preview">
+    <textarea class="import-box mono" name="raw" rows="8" spellcheck="false"
+      placeholder='paste routine JSON from claude.ai ({"version": 1, "routines": [...]})'>{{ raw }}</textarea>
+    {% if errors %}
+    <div class="import-errors mono">
+      {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+    </div>
+    {% endif %}
+    <button class="btn-primary accent-violet" type="submit">PREVIEW IMPORT</button>
+  </form>
+</div>
+{% endblock %}

@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth
+from . import auth, importer
 from .config import SECRET
 from .db import get_db, init_db, run_week_completion, utcnow
 
@@ -92,6 +92,98 @@ def home(request: Request):
         "in_progress": in_progress,
         "in_progress_accent": accent_for(in_progress["routine_name"] or "") if in_progress else None,
     })
+
+
+# ---- routines + import ----
+
+def _routine_cards(db):
+    routines = db.execute(
+        "SELECT * FROM routine WHERE is_archived = 0 ORDER BY position, id"
+    ).fetchall()
+    cards = []
+    for r in routines:
+        exercises = db.execute(
+            "SELECT e.name, re.target_sets, re.rep_min, re.rep_max FROM routine_exercise re "
+            "JOIN exercise e ON e.id = re.exercise_id WHERE re.routine_id = ? ORDER BY re.position",
+            (r["id"],),
+        ).fetchall()
+        cards.append({"routine": r, "accent": accent_for(r["name"]), "exercises": exercises})
+    return cards
+
+
+@app.get("/routines", response_class=HTMLResponse)
+def routines_page(request: Request, imported: int = 0):
+    if not auth.is_authed(request):
+        return login_redirect()
+    db = get_db()
+    cards = _routine_cards(db)
+    db.close()
+    return templates.TemplateResponse(request, "routines.html", {
+        "cards": cards,
+        "imported": imported,
+        "errors": [],
+        "raw": "",
+    })
+
+
+def _parse_import(raw: str):
+    """Returns (payload, errors). payload is None when unusable."""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return None, [f"not valid JSON: {e.msg} (line {e.lineno})"]
+    errors = importer.validate(payload)
+    return (None, errors) if errors else (payload, [])
+
+
+@app.post("/routines/import/preview", response_class=HTMLResponse)
+def import_preview(request: Request, raw: str = Form("")):
+    if not auth.is_authed(request):
+        return login_redirect()
+    payload, errors = _parse_import(raw)
+    if errors:
+        db = get_db()
+        cards = _routine_cards(db)
+        db.close()
+        return templates.TemplateResponse(request, "routines.html", {
+            "cards": cards,
+            "imported": 0,
+            "errors": errors,
+            "raw": raw,
+        }, status_code=422)
+    db = get_db()
+    plan = importer.plan(db, payload)
+    db.close()
+    return templates.TemplateResponse(request, "import_preview.html", {
+        "plan": plan,
+        "raw": raw,
+    })
+
+
+@app.post("/routines/import/apply")
+def import_apply(request: Request, raw: str = Form("")):
+    if not auth.is_authed(request):
+        return login_redirect()
+    payload, errors = _parse_import(raw)
+    if errors:
+        return RedirectResponse("/routines", status_code=303)
+    db = get_db()
+    importer.apply_import(db, payload, utcnow())
+    db.commit()
+    db.close()
+    return RedirectResponse("/routines?imported=1", status_code=303)
+
+
+@app.get("/exercises", response_class=HTMLResponse)
+def exercises_page(request: Request):
+    if not auth.is_authed(request):
+        return login_redirect()
+    db = get_db()
+    exercises = db.execute(
+        "SELECT * FROM exercise WHERE is_archived = 0 ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    db.close()
+    return templates.TemplateResponse(request, "exercises.html", {"exercises": exercises})
 
 
 # ---- workout ----

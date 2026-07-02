@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}liftlog{% endblock %}
 {% block content %}
-<header class="app-header">
-  <div class="section-label">liftlog</div>
-  <div class="mono muted week-count">{{ sessions_this_week }} session{{ '' if sessions_this_week == 1 else 's' }} this week</div>
+<header class="app-header header-row">
+  <div>
+    <div class="section-label">liftlog</div>
+    <div class="mono muted week-count">{{ sessions_this_week }} session{{ '' if sessions_this_week == 1 else 's' }} this week</div>
+  </div>
+  <nav class="mono nav-links"><a href="/routines">routines</a></nav>
 </header>
 
 {% if in_progress %}

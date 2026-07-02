@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}import preview — liftlog{% endblock %}
+{% block content %}
+<header class="app-header">
+  <div class="section-label">import preview</div>
+  <div class="mono muted card-meta">nothing is saved until you confirm</div>
+</header>
+
+{% for r in plan %}
+<div class="card">
+  <div class="card-title">{{ r.name }}</div>
+  <div class="mono card-meta {{ 'import-replace' if r.action == 'replace' else 'import-create' }}">
+    {{ 'replaces existing routine' if r.action == 'replace' else 'new routine' }}</div>
+  <div class="routine-lines mono muted">
+    {% for ex in r.exercises %}
+    <div class="routine-line">
+      <span>{{ ex.name }}{% if ex.is_primary %} <span class="import-primary">primary</span>{% endif %}</span>
+      <span>{{ ex.sets }} × {{ ex.rep_min }}–{{ ex.rep_max }}
+        · {{ 'update' if ex.action == 'update' else 'new' }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+<div class="mono muted card-meta sp-top">re-imported routines keep their history —
+only the prescription is replaced. known exercises get updated cues and tags.</div>
+
+<form method="post" action="/routines/import/apply">
+  <input type="hidden" name="raw" value="{{ raw }}">
+  <button class="btn-primary accent-violet" type="submit">IMPORT</button>
+</form>
+<a class="btn-quiet mono cancel-link" href="/routines">cancel</a>
+{% endblock %}

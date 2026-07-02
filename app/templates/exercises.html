@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}exercises — liftlog{% endblock %}
+{% block content %}
+<header class="app-header header-row">
+  <div>
+    <div class="section-label">exercise library</div>
+    <div class="mono muted card-meta">{{ exercises | length }} exercise{{ '' if exercises | length == 1 else 's' }}</div>
+  </div>
+  <nav class="mono nav-links"><a href="/">home</a> · <a href="/routines">routines</a></nav>
+</header>
+
+{% for ex in exercises %}
+<div class="card">
+  <div class="card-title">{{ ex.name }}</div>
+  <div class="mono muted card-meta">{{ ex.movement_pattern }} · {{ ex.muscle_group }}
+    · +{{ '%g' % ex.increment_kg }} kg · {{ ex.display_unit }}
+    · <a href="https://www.youtube.com/results?search_query={{ ex.youtube_query | urlencode }}"
+         target="_blank" rel="noopener">demo</a></div>
+  {% if ex.cue %}<div class="exercise-cue">{{ ex.cue }}</div>{% endif %}
+</div>
+{% else %}
+<div class="card"><div class="mono muted">no exercises yet</div></div>
+{% endfor %}
+{% endblock %}
