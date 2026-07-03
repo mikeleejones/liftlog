@@ -120,6 +120,20 @@ CREATE TABLE IF NOT EXISTS ai_call_log (
     id         INTEGER PRIMARY KEY,
     created_at TEXT NOT NULL
 );
+
+-- Read-only automation credentials for external tools (Shortcuts, scripts).
+-- Separate from the browser login secret; shown once at creation, revocable.
+-- Endpoints that opt in accept either the browser cookie or a Bearer token
+-- matching a row here (see token_or_cookie_authed in main.py).
+CREATE TABLE IF NOT EXISTS api_token (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL,
+    token        TEXT NOT NULL UNIQUE,
+    scope        TEXT NOT NULL DEFAULT 'read_only'
+                 CHECK (scope IN ('read_only')),
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT
+);
 """
 
 AI_CALLS_PER_DAY_LIMIT = 100

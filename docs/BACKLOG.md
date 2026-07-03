@@ -295,3 +295,97 @@ choosing.
   requiring the manual toggle too, though the manual toggle should exist
   for quick reactivation without needing the JSON on hand.
 
+---
+
+## 7. Read-only automation tokens (foundation for items 8 and 9)
+
+This amends CLAUDE.md's stated non-goal of "auth beyond a single shared
+secret." That non-goal is about not building a multi-user account system —
+this isn't that. It's a second, narrower credential type solely for
+external automations (Shortcuts, future scripts) to read data without
+holding the same secret that logs you into the app itself. Still
+single-user, still no accounts, no passwords, no signup flow.
+
+**Schema addition** (docs/schema.md):
+
+```sql
+CREATE TABLE api_token (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL,       -- e.g. "iPhone Shortcuts"
+    token        TEXT NOT NULL UNIQUE,-- random, shown once at creation
+    scope        TEXT NOT NULL DEFAULT 'read_only'
+                 CHECK (scope IN ('read_only')),
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT
+);
+```
+
+v1 scope is `read_only` only — nothing external can modify LiftLog data yet,
+only read it. Write access (e.g. an automation logging a workout directly)
+is explicitly out of scope until there's a real use case for it.
+
+**Settings UI:** a simple token manager — create (name it, shown once,
+same UX pattern as the Anthropic console's own key creation, which you've
+now used and is a good precedent) and revoke. A "last used" timestamp on
+each so stale tokens are easy to spot and clean up.
+
+**Auth on any endpoint that accepts tokens:** accept EITHER the existing
+browser cookie OR a valid `Authorization: Bearer <token>` header matching
+an `api_token` row. Browser login flow is completely unchanged — this is
+purely additive.
+
+---
+
+## 8. Read-only "latest workout" endpoint
+
+Enables the Apple Health bridge via Shortcuts (Health has no web API, so
+this is the realistic path — a Shortcut pulls from LiftLog, then writes to
+Health itself).
+
+`GET /api/latest-workout` — requires a valid token (item 7). Returns the
+most recently *finished* workout: `id` (the workout's database id, stable
+and never reused — critical for idempotency, see below), date, duration
+(finished_at - started_at), routine name, is_deload flag, total volume (sum
+of weight x reps across weight_reps sets). A rough calorie estimate is
+explicitly NOT included — that math is Health's job once it has duration
+and workout type, not LiftLog's to guess at.
+
+**Idempotency is the Shortcut's job, not this endpoint's.** This stays a
+pure read — LiftLog never tracks whether a sync happened, keeping it
+consistent with item 7's read-only scope. Instead, the response's `id`
+field is what a repeatedly-triggered Shortcut uses to avoid double-writing
+to Health: the Shortcut keeps a small text file (Shortcuts can read/write
+files in iCloud Drive) holding the last synced workout `id`. Each run:
+fetch latest workout, compare `id` to the stored value — same id, do
+nothing; different id, write to Health and update the stored file. This
+means triggering the Shortcut twice (or on an automatic location-based
+trigger that fires more than once) is always safe, entirely without
+LiftLog needing any write capability or sync-state of its own.
+
+Small enough to keep read-only and single-purpose: this endpoint answers
+exactly one question ("what was my last workout") and nothing more. A
+"today's routine" variant is tempting to bundle in but should wait for a
+concrete use case (e.g. a home-screen widget) rather than being built
+speculatively.
+
+---
+
+## 9. Program-only export (distinct from the existing full backup export)
+
+v0.4 already has a full-database JSON export on Settings — everything,
+including workout history. This is different: a **program-only** export in
+exactly the same shape as the import format (routines + exercises, tags,
+targets — no workout/set_log history at all).
+
+Use cases this unlocks: round-tripping a program out to tweak with Claude
+and back in without a full-database file; sharing a routine with someone
+else's LiftLog instance (Sarah, if she ever wants her own HYROX program in
+her own instance) without exposing your training history; a clean backup of
+"just the program" separate from personal data.
+
+**UI:** a second export button on Settings, "Export Program Only," output
+identical in shape to the existing import JSON schema — meaning it can be
+fed right back into Import with no transformation. Uses the same
+token-or-cookie auth as everything else on Settings (no new auth needed,
+this one's browser-only, not part of the automation surface).
+

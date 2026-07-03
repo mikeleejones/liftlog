@@ -254,6 +254,35 @@ CREATE TABLE ai_call_log (
 );
 ```
 
+### api_token
+Read-only automation credentials (BACKLOG item 7) for external tools — an iPhone
+Shortcut, a script — to read data without holding the browser login secret. Not a
+multi-user account system: still single-user, no passwords, no signup. Token values
+are long random strings (`secrets.token_urlsafe`) shown exactly once at creation and
+never displayed again; revoke deletes the row.
+
+```sql
+CREATE TABLE api_token (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL,       -- e.g. "iPhone Shortcuts"
+    token        TEXT NOT NULL UNIQUE,-- random, shown once at creation
+    scope        TEXT NOT NULL DEFAULT 'read_only'
+                 CHECK (scope IN ('read_only')),
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT                 -- NULL until first successful use
+);
+```
+
+v1 scope is `read_only` only. An endpoint that opts into token auth
+(`token_or_cookie_authed` in main.py) accepts EITHER the browser cookie OR a valid
+`Authorization: Bearer <token>` header matching a row here, bumping `last_used_at` on
+a token match. The browser cookie login flow is unchanged — this is purely additive.
+Currently only `GET /api/latest-workout` (BACKLOG item 8) opts in; it returns the most
+recently finished workout (`id`, `date`, `duration_seconds`, `routine_name`,
+`is_deload`, `total_volume_kg` over normal `weight_reps` sets) as JSON. The program-only
+export (`GET /export/program`, BACKLOG item 9) emits the active program in the exact v2
+import shape (no history) and stays browser-only (cookie), not part of the token surface.
+
 ---
 
 ## Derived values (computed, never stored)

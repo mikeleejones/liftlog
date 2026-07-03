@@ -16,7 +16,11 @@ overload using double progression with deload weeks. Exercise demos are YouTube
 search links, so the exercise library is unlimited. Data is exportable as JSON
 at any time.
 
-It does NOT do: accounts/auth beyond a single shared secret, social features,
+It does NOT do: accounts/auth beyond a single shared secret (plus a separate,
+narrower read-only automation token type for external tools like Shortcuts and
+scripts — revocable credentials, distinct from the browser login secret; this
+is NOT a multi-user account system: still single-user, no passwords, no signup),
+social features,
 coaching content, body measurements, nutrition, offline operation, supersets,
 or per-set RPE. Do not add these.
 

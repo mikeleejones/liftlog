@@ -305,6 +305,22 @@ body {
 .secret-input:focus { border-color: var(--violet); }
 .login-error { color: var(--red); font-size: 13px; margin-top: 8px; }
 
+/* automation tokens (settings) */
+.token-list { margin-top: 12px; }
+.token-reveal {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--green);
+  border-radius: 8px;
+}
+.token-value {
+  margin-top: 6px;
+  font-size: 13px;
+  word-break: break-all;
+  color: var(--text);
+}
+
 /* workout */
 .workout-header {
   display: flex;

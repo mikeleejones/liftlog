@@ -20,3 +20,12 @@ def is_authed(request: Request) -> bool:
 
 def secret_matches(candidate: str) -> bool:
     return bool(SECRET) and hmac.compare_digest(candidate, SECRET)
+
+
+def bearer_token(request: Request) -> str:
+    """The token from an 'Authorization: Bearer <token>' header, or '' if absent.
+    Used only by endpoints that opt into token auth; the cookie flow above is
+    untouched."""
+    header = request.headers.get("authorization", "")
+    scheme, _, value = header.partition(" ")
+    return value.strip() if scheme.lower() == "bearer" else ""

@@ -33,6 +33,49 @@
 <div class="card">
   <div class="mono muted card-meta">{{ counts.workouts }} workouts · {{ counts.sets }} sets · {{ counts.exercises }} exercises</div>
   <a class="btn-primary accent-violet btn-link" href="{{ base }}/export">EXPORT JSON</a>
+  <div class="mono muted card-meta sp-top">program only — routines + exercises, no history. re-importable through the Import screen.</div>
+  <a class="btn-confirm btn-link" href="{{ base }}/export/program">EXPORT PROGRAM ONLY</a>
+</div>
+
+<div class="section-label sp-top">automation tokens</div>
+<div class="card">
+  <div class="mono muted card-meta">read-only credentials for external tools (Shortcuts, scripts).
+    separate from the login secret. a token is shown once at creation and never again.</div>
+
+  {% if new_token %}
+  <div class="token-reveal">
+    <div class="mono accent-text-green">new token · {{ new_token.name }}</div>
+    <div class="mono token-value">{{ new_token.token }}</div>
+    <div class="mono muted card-meta">copy it now — this is the only time it will be shown.</div>
+    <button class="btn-quiet" type="button"
+      onclick="navigator.clipboard.writeText('{{ new_token.token }}');this.textContent='COPIED'">COPY</button>
+  </div>
+  {% endif %}
+
+  {% if tokens %}
+  <div class="token-list">
+    {% for t in tokens %}
+    <div class="routine-line">
+      <div>
+        <div class="mono">{{ t.name }}</div>
+        <div class="mono muted sub-meta">created {{ t.created_at[:10] }} ·
+          {% if t.last_used_at %}last used {{ t.last_used_at[:10] }}{% else %}never used{% endif %}</div>
+      </div>
+      <form method="post" action="{{ base }}/settings/tokens/{{ t.id }}/revoke">
+        <button class="btn-quiet danger" type="submit">REVOKE</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="mono muted card-meta">no tokens yet.</div>
+  {% endif %}
+
+  <form method="post" action="{{ base }}/settings/tokens" class="sub-new">
+    <input class="secret-input sub-new-input mono" type="text" name="name"
+      placeholder="e.g. iPhone Shortcuts" autocomplete="off" spellcheck="false">
+    <button class="btn-quiet" type="submit">CREATE</button>
+  </form>
 </div>
 
 <div class="section-label sp-top">secret</div>

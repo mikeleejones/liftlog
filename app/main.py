@@ -1,4 +1,5 @@
 import json
+import secrets
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -157,6 +158,24 @@ def parse_ts(ts: str) -> datetime:
 
 def login_redirect(request: Request) -> RedirectResponse:
     return redirect(request, "/login")
+
+
+def token_or_cookie_authed(request: Request, db) -> bool:
+    """True for a valid browser cookie OR a valid 'Authorization: Bearer <token>'
+    header matching an api_token row. On a successful token match, last_used_at is
+    bumped. The browser cookie flow is unchanged; this is purely additive for
+    endpoints that opt in (BACKLOG item 7). Callers pass an open db."""
+    if auth.is_authed(request):
+        return True
+    token = auth.bearer_token(request)
+    if not token:
+        return False
+    row = db.execute("SELECT id FROM api_token WHERE token = ?", (token,)).fetchone()
+    if row is None:
+        return False
+    db.execute("UPDATE api_token SET last_used_at = ? WHERE id = ?", (utcnow(), row["id"]))
+    db.commit()
+    return True
 
 
 # ---- auth ----
@@ -608,11 +627,7 @@ def progress_page(request: Request):
     })
 
 
-@app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request):
-    if not auth.is_authed(request):
-        return login_redirect(request)
-    db = get_db()
+def _settings_context(db, new_token=None):
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
     now = utcnow()
     deload = progression.deload_active(db, now)
@@ -623,15 +638,58 @@ def settings_page(request: Request):
         ).fetchone()[0],
         "sets": db.execute("SELECT COUNT(*) FROM set_log").fetchone()[0],
     }
-    db.close()
-    return templates.TemplateResponse(request, "settings.html", {
+    tokens = db.execute(
+        "SELECT id, name, created_at, last_used_at FROM api_token ORDER BY created_at DESC, id DESC"
+    ).fetchall()
+    return {
         "deload": deload,
         "weeks_since_deload": state["weeks_since_deload"],
         "completed_weeks": state["completed_weeks"],
         "deload_deferred": bool(state["deload_deferred_until"] and state["deload_deferred_until"] > now),
         "counts": counts,
         "objective": state["objective"] or "",
-    })
+        "tokens": tokens,
+        "new_token": new_token,
+    }
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    context = _settings_context(db)
+    db.close()
+    return templates.TemplateResponse(request, "settings.html", context)
+
+
+@app.post("/settings/tokens", response_class=HTMLResponse)
+def create_token(request: Request, name: str = Form("")):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    name = name.strip() or "unnamed token"
+    # long random URL-safe string; shown exactly once here and never again
+    token = secrets.token_urlsafe(32)
+    db.execute(
+        "INSERT INTO api_token (name, token, scope, created_at) VALUES (?, ?, 'read_only', ?)",
+        (name, token, utcnow()),
+    )
+    db.commit()
+    context = _settings_context(db, new_token={"name": name, "token": token})
+    db.close()
+    return templates.TemplateResponse(request, "settings.html", context)
+
+
+@app.post("/settings/tokens/{token_id}/revoke")
+def revoke_token(request: Request, token_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    db.execute("DELETE FROM api_token WHERE id = ?", (token_id,))
+    db.commit()
+    db.close()
+    return redirect(request, "/settings")
 
 
 @app.post("/settings/objective")
@@ -660,6 +718,69 @@ def export_json(request: Request):
         data,
         headers={"Content-Disposition": f'attachment; filename="liftlog-export-{stamp}.json"'},
     )
+
+
+@app.get("/export/program")
+def export_program_json(request: Request):
+    """Program-only export (BACKLOG item 9): the active program in the exact v2
+    import shape, no history. Browser-only (cookie), not part of the token
+    surface. Re-importable through the Import screen as-is."""
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    data = exporter.export_program(db)
+    db.close()
+    if data is None:
+        return redirect(request, "/settings")
+    stamp = utcnow()[:10]
+    return JSONResponse(
+        data,
+        headers={"Content-Disposition": f'attachment; filename="liftlog-program-{stamp}.json"'},
+    )
+
+
+@app.get("/api/latest-workout")
+def latest_workout(request: Request):
+    """Read-only latest finished workout for the Health-bridge Shortcut (BACKLOG
+    item 8). Accepts a browser cookie OR a Bearer token (item 7). The `id` is the
+    stable workout row id the Shortcut uses for client-side idempotency."""
+    db = get_db()
+    if not token_or_cookie_authed(request, db):
+        db.close()
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    workout = db.execute(
+        "SELECT * FROM workout WHERE finished_at IS NOT NULL "
+        "ORDER BY finished_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if workout is None:
+        db.close()
+        return JSONResponse({"error": "no finished workouts"}, status_code=404)
+    routine_name = "Ad-hoc Session"
+    if workout["routine_id"]:
+        row = db.execute(
+            "SELECT name FROM routine WHERE id = ?", (workout["routine_id"],)
+        ).fetchone()
+        if row:
+            routine_name = row["name"]
+    duration = (parse_ts(workout["finished_at"]) - parse_ts(workout["started_at"])).total_seconds()
+    # volume = weight x reps over normal sets of weight_reps exercises only
+    volume = db.execute(
+        "SELECT COALESCE(SUM(s.weight_kg * s.reps), 0) AS v FROM set_log s "
+        "JOIN exercise e ON e.id = s.exercise_id "
+        "WHERE s.workout_id = ? AND s.set_type = 'normal' "
+        "AND e.exercise_type = 'weight_reps' "
+        "AND s.weight_kg IS NOT NULL AND s.reps IS NOT NULL",
+        (workout["id"],),
+    ).fetchone()["v"]
+    db.close()
+    return {
+        "id": workout["id"],
+        "date": workout["finished_at"],
+        "duration_seconds": int(duration),
+        "routine_name": routine_name,
+        "is_deload": bool(workout["is_deload"]),
+        "total_volume_kg": round(volume, 2),
+    }
 
 
 # ---- workout ----
