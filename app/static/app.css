@@ -194,6 +194,31 @@ body {
 .import-create { color: var(--green); }
 .import-replace { color: var(--gold); }
 .import-archive { color: var(--red); }
+/* active/archived view toggle — segmented control, same chrome as buttons */
+.view-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.view-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+}
+.view-tab.is-active {
+  color: var(--violet);
+  border-color: var(--violet);
+}
+
 .program-card.program-active { border-color: var(--violet); }
 .week-label { margin-top: 12px; }
 .import-primary {

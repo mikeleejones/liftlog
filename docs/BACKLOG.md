@@ -104,3 +104,101 @@ question at the gym.
   errors — rule-based alternatives remain available regardless, this is
   always additive, never a blocking dependency.
 
+---
+
+## 5. Exercise type (weight/reps, reps-only, duration, distance, none)
+
+Right now every exercise is assumed to be weight + reps. That's wrong for
+stretches, planks, and anything bodyweight-timed — and will be wrong for
+future distance work (HYROX running intervals). This needs a real type field
+that changes both what gets logged and what input control Active Workout
+shows.
+
+**Schema additions** (docs/schema.md):
+
+```sql
+-- exercise table
+exercise_type TEXT NOT NULL DEFAULT 'weight_reps'
+    CHECK (exercise_type IN
+      ('weight_reps','reps_only','duration','weight_duration',
+       'distance_duration','none'))
+```
+
+`display_unit`'s CHECK constraint broadens to also allow `'km'`/`'mi'` for
+distance-type exercises (kg/lbs stays for weight-type; duration always
+renders as mm:ss with no unit toggle; `none` has no unit at all).
+
+```sql
+-- set_log table: weight_kg and reps both become nullable (currently
+-- weight_kg is NOT NULL). Add two new nullable columns:
+duration_seconds REAL,
+distance_m REAL
+```
+
+Which columns get populated depends entirely on the exercise's
+`exercise_type` — the app decides what to show/save, the schema just has
+room for all of it.
+
+**Input control per type on Active Workout:**
+- `weight_reps` — unchanged: weight stepper + reps stepper (today's design).
+- `reps_only` — reps stepper only, no weight chip. (Cat-Cow, bodyweight
+  push-ups, etc.)
+- `duration` — a duration stepper (seconds, displayed mm:ss where relevant),
+  same "did as suggested" one-tap pattern, pre-filled from last time.
+  (Plank, dead hang, stretches you actually want tracked.)
+- `weight_duration` — weight stepper + duration stepper. (Weighted plank,
+  farmer's carry hold.)
+- `distance_duration` — distance stepper + duration stepper. (Future: row
+  erg, running intervals — not needed for the current program, schema-ready
+  for later.)
+- `none` — no metric input at all. Just a checkbox/tap to mark it done.
+  Creates a `set_log` row with everything NULL except the type marker, for
+  session-completion history only. (Plain stretches like the doorway chest
+  stretch — you did it, nothing to measure.)
+
+**Progression scope for v1** — keep this proportionate:
+- `weight_reps`: existing double-progression engine, unchanged.
+- `reps_only` and `duration`: simple version — suggest +1 rep or +5s when
+  the top of range is hit cleanly, same stall logic (3 flat sessions ->
+  flag it), just without a weight axis.
+- `weight_duration` and `distance_duration`: log and chart, but **no
+  auto-suggestion in v1** — you don't have exercises of these types yet
+  (HYROX running work is the likely future case). Don't build the
+  suggestion logic ahead of having a real exercise to test it against.
+- `none`: never enters progression or stall logic at all. It's a completion
+  record, nothing more.
+
+**Import JSON:** add `exercise_type` per exercise, default `weight_reps` if
+omitted — so the program you already imported keeps working without
+modification, and only new imports need to specify it.
+
+---
+
+## 6. Archive and reactivate programs (schema already supports this — UI only)
+
+Good news: `routine.is_archived` already exists in the schema from the
+original design — this was built in deliberately but never got a screen.
+This is a UI-only addition, not a schema change.
+
+**Distinct from Item 1 (delete):** archive is soft and reversible — the
+routine and its routine_exercise rows stay fully intact, it's just hidden
+from the default Routines view. Delete (item 1) is hard and permanent. Both
+should be offered as separate actions (e.g. two options on a routine's
+menu/swipe: "Archive" vs "Delete"), so it's never ambiguous which one you're
+choosing.
+
+**UI:**
+- Routines screen gets two views — Active (default) and Archived (a tab or
+  toggle at the top, per design-language.md's existing tab pattern from
+  Active Workout's day tabs).
+- Active routines get an "Archive" action → sets `is_archived = 1`, routine
+  moves to the Archived view, disappears from Home's "today's routine"
+  logic.
+- Archived routines get a "Reactivate" action → sets `is_archived = 0`,
+  routine moves back to Active.
+- Re-importing JSON with a name matching an archived routine should also
+  reactivate it automatically (update its exercises AND flip
+  `is_archived = 0`) — so pasting a program back in "just works" without
+  requiring the manual toggle too, though the manual toggle should exist
+  for quick reactivation without needing the JSON on hand.
+

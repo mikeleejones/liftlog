@@ -177,9 +177,11 @@ def defer_deload(request: Request):
 
 # ---- routines + import ----
 
-def _program_groups(db):
-    """Programs (active first) with their unarchived routines grouped by week,
-    plus any standalone routines."""
+def _program_groups(db, archived=False):
+    """Programs (active first) with their routines grouped by week, plus any
+    standalone routines. `archived` selects the archived view (is_archived = 1)
+    instead of the default active view."""
+    flag = 1 if archived else 0
     groups = []
     programs = db.execute(
         "SELECT * FROM program ORDER BY is_active DESC, name"
@@ -189,9 +191,9 @@ def _program_groups(db):
         routines = db.execute(
             "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
             "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
-            "WHERE r.program_id = ? AND r.is_archived = 0 "
+            "WHERE r.program_id = ? AND r.is_archived = ? "
             "GROUP BY r.id ORDER BY r.week_number, r.position, r.id",
-            (p["id"],),
+            (p["id"], flag),
         ).fetchall()
         if not routines:
             continue
@@ -208,15 +210,19 @@ def _program_groups(db):
     standalone = db.execute(
         "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
         "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
-        "WHERE r.program_id IS NULL AND r.is_archived = 0 "
-        "GROUP BY r.id ORDER BY r.position, r.id"
+        "WHERE r.program_id IS NULL AND r.is_archived = ? "
+        "GROUP BY r.id ORDER BY r.position, r.id",
+        (flag,),
     ).fetchall()
     return groups, [dict(r, accent=accent_for(r["name"])) for r in standalone]
 
 
-def _routines_context(db, imported=0, errors=None, raw=""):
-    groups, standalone = _program_groups(db)
+def _routines_context(db, imported=0, errors=None, raw="", view="active"):
+    archived = view == "archived"
+    groups, standalone = _program_groups(db, archived=archived)
     return {
+        "view": "archived" if archived else "active",
+        "archived": archived,
         "groups": groups,
         "standalone": standalone,
         "imported": imported,
@@ -226,11 +232,11 @@ def _routines_context(db, imported=0, errors=None, raw=""):
 
 
 @app.get("/routines", response_class=HTMLResponse)
-def routines_page(request: Request, imported: int = 0):
+def routines_page(request: Request, imported: int = 0, view: str = "active"):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
-    context = _routines_context(db, imported=imported)
+    context = _routines_context(db, imported=imported, view=view)
     db.close()
     return templates.TemplateResponse(request, "routines.html", context)
 
@@ -261,6 +267,36 @@ def delete_routine(request: Request, routine_id: int):
     db.commit()
     db.close()
     return redirect(request, "/routines")
+
+
+@app.post("/routines/{routine_id}/archive")
+def archive_routine(request: Request, routine_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    # Soft, reversible: routine_exercise rows and all workout history untouched.
+    # Home's "today's routine" logic filters is_archived = 0, so it drops out.
+    db.execute(
+        "UPDATE routine SET is_archived = 1, updated_at = ? WHERE id = ?",
+        (utcnow(), routine_id),
+    )
+    db.commit()
+    db.close()
+    return redirect(request, "/routines")
+
+
+@app.post("/routines/{routine_id}/reactivate")
+def reactivate_routine(request: Request, routine_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    db.execute(
+        "UPDATE routine SET is_archived = 0, updated_at = ? WHERE id = ?",
+        (utcnow(), routine_id),
+    )
+    db.commit()
+    db.close()
+    return redirect(request, "/routines?view=archived")
 
 
 def _parse_import(raw: str):
