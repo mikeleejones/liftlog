@@ -58,6 +58,99 @@ def fmt_weight(kg: float, unit: str) -> str:
     return f"{round(to_display(kg, unit), 2):g}"
 
 
+M_PER_KM = 1000.0
+M_PER_MI = 1609.344
+
+
+def distance_display(m: float, unit: str) -> float:
+    if unit == "mi":
+        return m / M_PER_MI
+    if unit == "km":
+        return m / M_PER_KM
+    return m
+
+
+def fmt_distance(m: float, unit: str) -> str:
+    return f"{round(distance_display(m, unit), 2):g}"
+
+
+def fmt_duration(seconds: float) -> str:
+    seconds = int(round(seconds))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+# the metric that drives an exercise's chart/history "top" and PR line
+PRIMARY_METRIC = {
+    "weight_reps": "weight_kg",
+    "reps_only": "reps",
+    "duration": "duration_seconds",
+    "duration_weight": "weight_kg",
+    "distance": "distance_m",
+    "distance_weight": "distance_m",
+    "none": None,
+}
+
+
+def metric_label(exercise_type: str, unit: str) -> str:
+    """Axis/suffix label for an exercise's primary metric."""
+    if exercise_type in ("weight_reps", "duration_weight"):
+        return unit
+    if exercise_type == "reps_only":
+        return "reps"
+    if exercise_type == "duration":
+        return ""  # mm:ss is self-describing
+    if exercise_type in ("distance", "distance_weight"):
+        return unit
+    return ""
+
+
+def fmt_primary(exercise_type: str, value, unit: str) -> str:
+    """Bare human string for an exercise's primary metric value (weight, reps,
+    duration, or distance) in its display unit — no unit suffix; pair with
+    metric_label(). Duration self-describes as mm:ss."""
+    if value is None:
+        return "—"
+    if exercise_type in ("weight_reps", "duration_weight"):
+        return fmt_weight(value, unit)
+    if exercise_type == "reps_only":
+        return str(int(value))
+    if exercise_type == "duration":
+        return fmt_duration(value)
+    if exercise_type in ("distance", "distance_weight"):
+        return fmt_distance(value, unit)
+    return ""
+
+
+def primary_chart_value(exercise_type: str, value, unit: str) -> float:
+    """Numeric value plotted on the Exercise Detail chart, in display terms."""
+    if value is None:
+        return 0.0
+    if exercise_type in ("weight_reps", "duration_weight"):
+        return to_display(value, unit)
+    if exercise_type in ("distance", "distance_weight"):
+        return distance_display(value, unit)
+    return float(value)
+
+
+def set_cell(exercise_type: str, row, unit: str):
+    """(cell_text, unit_suffix) for one logged set. weight_reps keeps its
+    'W × R' cell plus a shared unit suffix (unchanged look); other types embed
+    their own units inline and carry no suffix."""
+    if exercise_type == "weight_reps":
+        return f"{fmt_weight(row['weight_kg'], unit)} × {row['reps']}", unit
+    if exercise_type == "reps_only":
+        return f"{row['reps']}", "reps"
+    if exercise_type == "duration":
+        return fmt_duration(row["duration_seconds"]), ""
+    if exercise_type == "distance":
+        return f"{fmt_distance(row['distance_m'], unit)} {unit}", ""
+    if exercise_type == "duration_weight":
+        return f"{fmt_weight(row['weight_kg'], unit)}{unit} · {fmt_duration(row['duration_seconds'])}", ""
+    if exercise_type == "distance_weight":
+        return f"{fmt_distance(row['distance_m'], unit)}{unit} · {fmt_weight(row['weight_kg'], 'kg')}kg", ""
+    return "done", ""  # none
+
+
 def parse_ts(ts: str) -> datetime:
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
@@ -356,12 +449,18 @@ def exercises_page(request: Request):
 
 # ---- progress + exercise detail + settings ----
 
-def _exercise_history(db, exercise_id, unit):
+def _exercise_history(db, exercise):
     """Per-workout summary for one exercise (working sets only), oldest first,
-    with top-set weight, volume, date, deload flag, and PR marks. A PR is a
-    top-set weight strictly above every earlier session's top set."""
+    with the type's primary-metric top, date, deload flag, and PR marks. A PR is
+    a top value strictly above every earlier session's top. Charts and history
+    ignore progress_reset_at — full history is always shown."""
+    exercise_id = exercise["id"]
+    etype = exercise["exercise_type"]
+    unit = exercise["display_unit"]
+    primary = PRIMARY_METRIC[etype]
     rows = db.execute(
-        "SELECT w.id AS wid, w.started_at, w.is_deload, s.weight_kg, s.reps "
+        "SELECT w.id AS wid, w.started_at, w.is_deload, "
+        "s.weight_kg, s.reps, s.duration_seconds, s.distance_m "
         "FROM set_log s JOIN workout w ON w.id = s.workout_id "
         "WHERE s.exercise_id = ? AND s.set_type = 'normal' "
         "ORDER BY w.started_at, w.id, s.set_number",
@@ -372,27 +471,26 @@ def _exercise_history(db, exercise_id, unit):
         if not sessions or sessions[-1]["wid"] != r["wid"]:
             sessions.append({
                 "wid": r["wid"], "started_at": r["started_at"],
-                "is_deload": bool(r["is_deload"]), "sets": [], "top_kg": 0.0,
-                "volume_kg": 0.0,
+                "is_deload": bool(r["is_deload"]), "sets": [], "top": None,
             })
         s = sessions[-1]
-        s["sets"].append((r["weight_kg"], r["reps"]))
-        s["top_kg"] = max(s["top_kg"], r["weight_kg"])
-        s["volume_kg"] += r["weight_kg"] * r["reps"]
-    best = 0.0
+        s["sets"].append(r)
+        if primary is not None and r[primary] is not None:
+            s["top"] = r[primary] if s["top"] is None else max(s["top"], r[primary])
+    best = None
     history = []
     for s in sessions:
-        is_pr = (not s["is_deload"]) and s["top_kg"] > best
+        top = s["top"]
+        is_pr = (not s["is_deload"]) and top is not None and (best is None or top > best)
         if is_pr:
-            best = s["top_kg"]
+            best = top
         history.append({
             "date": s["started_at"][:10],
             "is_deload": s["is_deload"],
             "is_pr": is_pr,
-            "top": fmt_weight(s["top_kg"], unit),
-            "top_kg": s["top_kg"],
-            "sets_text": " · ".join(f"{fmt_weight(w, unit)}×{r}" for w, r in s["sets"]),
-            "volume": f"{round(to_display(s['volume_kg'], unit)):g}",
+            "top": fmt_primary(etype, top, unit),
+            "top_value": primary_chart_value(etype, top, unit) if top is not None else None,
+            "sets_text": " · ".join(set_cell(etype, row, unit)[0] for row in s["sets"]),
         })
     return history
 
@@ -407,20 +505,38 @@ def exercise_detail(request: Request, exercise_id: int):
         db.close()
         return redirect(request, "/exercises")
     unit = exercise["display_unit"]
-    history = _exercise_history(db, exercise_id, unit)
+    history = _exercise_history(db, exercise)
     db.close()
+    # 'none'-type exercises have no metric to chart; skip sessions with no top
     chart = charts.line_chart([
-        {"value": to_display(h["top_kg"], unit), "is_pr": h["is_pr"],
+        {"value": h["top_value"], "is_pr": h["is_pr"],
          "is_deload": h["is_deload"], "label": h["date"][5:]}
-        for h in history
+        for h in history if h["top_value"] is not None
     ])
     return templates.TemplateResponse(request, "exercise_detail.html", {
         "exercise": exercise,
-        "unit": unit,
+        "unit": metric_label(exercise["exercise_type"], unit),
         "history": list(reversed(history)),
         "chart": chart,
         "youtube_query": exercise["youtube_query"],
     })
+
+
+@app.post("/exercise/{exercise_id}/reset-progress")
+def reset_exercise_progress(request: Request, exercise_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    # Soft reset: no set_log rows are touched. Only the marker moves, so the
+    # progression/stall queries start fresh from the next session while charts
+    # and history keep showing everything. Resetting again just moves it forward.
+    db.execute(
+        "UPDATE exercise SET progress_reset_at = ? WHERE id = ?",
+        (utcnow(), exercise_id),
+    )
+    db.commit()
+    db.close()
+    return redirect(request, f"/exercise/{exercise_id}")
 
 
 @app.get("/progress", response_class=HTMLResponse)
@@ -449,19 +565,24 @@ def progress_page(request: Request):
             if re["id"] in seen:
                 continue
             seen.add(re["id"])
+            etype = re["exercise_type"]
+            unit = re["display_unit"]
+            primary = PRIMARY_METRIC[etype]
             s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
             last = db.execute(
-                "SELECT s.weight_kg FROM set_log s JOIN workout w ON w.id = s.workout_id "
+                "SELECT s.weight_kg, s.reps, s.duration_seconds, s.distance_m "
+                "FROM set_log s JOIN workout w ON w.id = s.workout_id "
                 "WHERE s.exercise_id = ? AND s.set_type = 'normal' AND w.is_deload = 0 "
                 "ORDER BY w.started_at DESC, s.id DESC LIMIT 1",
                 (re["id"],),
             ).fetchone()
+            last_val = last[primary] if (last and primary) else None
             lifts.append({
                 "id": re["id"],
                 "name": re["name"],
-                "unit": re["display_unit"],
-                "last": fmt_weight(last["weight_kg"], re["display_unit"]) if last else "—",
-                "suggest": fmt_weight(s["weight_kg"], re["display_unit"]),
+                "unit": metric_label(etype, unit),
+                "last": fmt_primary(etype, last_val, unit) if last else "—",
+                "suggest": fmt_primary(etype, s[primary], unit) if primary else "—",
                 "kind": s["kind"],
             })
 
@@ -550,17 +671,20 @@ def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
     """The per-exercise object the Active Workout JS consumes. Deload workouts
     override the prescription with 60% x 2x10 and skip warmup ramps."""
     workout_id = workout["id"]
+    etype = exercise["exercise_type"]
     if workout["is_deload"]:
         s = progression.deload_prefill(db, exercise, exclude_workout_id=workout_id)
-        target_sets, rep_min, rep_max = 2, 10, 10
+        # the classic 60% x 2x10 override is rep-based; other types just do 2 sets
+        target_sets, rep_min, rep_max = (2, 10, 10) if etype == "weight_reps" else (2, rep_min, rep_max)
         warmups = []
     else:
         s = progression.suggest(db, exercise, target_sets, rep_min, rep_max,
                                 exclude_workout_id=workout_id)
+        # warmup ramps are barbell-weight ramps: only weight_reps primaries get them
         warmups = progression.warmup_ramp(s["weight_kg"], exercise["display_unit"]) \
-            if is_primary else []
+            if is_primary and etype == "weight_reps" and s["weight_kg"] else []
     sets = db.execute(
-        "SELECT set_number, weight_kg, reps FROM set_log "
+        "SELECT set_number, weight_kg, reps, duration_seconds, distance_m FROM set_log "
         "WHERE workout_id = ? AND exercise_id = ? AND set_type = 'normal' "
         "ORDER BY set_number",
         (workout_id, exercise["id"]),
@@ -575,6 +699,7 @@ def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
         "name": exercise["name"],
         "cue": exercise["cue"],
         "youtube_query": exercise["youtube_query"],
+        "exercise_type": etype,
         "display_unit": exercise["display_unit"],
         "increment_kg": exercise["increment_kg"],
         "target_sets": target_sets,
@@ -584,6 +709,8 @@ def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
         "is_primary": is_primary,
         "suggest_weight_kg": s["weight_kg"],
         "suggest_reps": s["reps"],
+        "suggest_duration_seconds": s["duration_seconds"],
+        "suggest_distance_m": s["distance_m"],
         "suggest_kind": s["kind"],
         "warmups": warmups,
         "warmups_logged": warmups_logged,
@@ -665,11 +792,20 @@ async def log_set(request: Request, workout_id: int):
     if set_type not in ("normal", "warmup"):
         db.close()
         return JSONResponse({"error": "bad set_type"}, status_code=400)
+
+    def _num(key, cast):
+        v = body.get(key)
+        return None if v is None else cast(v)
+
+    # which metric columns are populated is the client's call (driven by
+    # exercise_type); any omitted metric is stored NULL — a 'none' set is all-NULL
     db.execute(
         "INSERT INTO set_log (workout_id, exercise_id, set_number, set_type, weight_kg, reps, "
-        "was_suggested, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "duration_seconds, distance_m, was_suggested, logged_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (workout_id, int(body["exercise_id"]), int(body["set_number"]), set_type,
-         float(body["weight_kg"]), int(body["reps"]),
+         _num("weight_kg", float), _num("reps", int),
+         _num("duration_seconds", float), _num("distance_m", float),
          1 if body.get("was_suggested") else 0, utcnow()),
     )
     db.commit()
@@ -778,12 +914,14 @@ async def substitute(request: Request, workout_id: int):
             else:
                 pattern, group, yt = (planned["movement_pattern"],
                                       planned["muscle_group"], f"{name.lower()} form")
+            # inherit the planned exercise's type/unit so a swapped-in stretch,
+            # hold, or carry keeps the right input control (not weight_reps + km)
             actual_id = db.execute(
                 "INSERT INTO exercise (name, cue, youtube_query, movement_pattern, "
-                "muscle_group, display_unit, increment_kg, created_at) "
-                "VALUES (?, '', ?, ?, ?, ?, ?, ?)",
-                (name, yt, pattern, group, planned["display_unit"],
-                 planned["increment_kg"], now),
+                "muscle_group, exercise_type, display_unit, increment_kg, created_at) "
+                "VALUES (?, '', ?, ?, ?, ?, ?, ?, ?)",
+                (name, yt, pattern, group, planned["exercise_type"],
+                 planned["display_unit"], planned["increment_kg"], now),
             ).lastrowid
             actual = db.execute("SELECT * FROM exercise WHERE id = ?", (actual_id,)).fetchone()
     else:
@@ -823,7 +961,7 @@ async def set_unit(request: Request, exercise_id: int):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await request.json()
     unit = body.get("unit")
-    if unit not in ("kg", "lbs"):
+    if unit not in ("kg", "lbs", "km", "mi"):
         return JSONResponse({"error": "bad unit"}, status_code=400)
     db = get_db()
     db.execute("UPDATE exercise SET display_unit = ? WHERE id = ?", (unit, exercise_id))
@@ -869,7 +1007,8 @@ def summary_page(request: Request, workout_id: int):
         return redirect(request, "/")
     routine = db.execute("SELECT * FROM routine WHERE id = ?", (workout["routine_id"],)).fetchone()
     rows = db.execute(
-        "SELECT s.exercise_id, e.name, e.display_unit, s.weight_kg, s.reps "
+        "SELECT s.exercise_id, e.name, e.exercise_type, e.display_unit, "
+        "s.weight_kg, s.reps, s.duration_seconds, s.distance_m "
         "FROM set_log s JOIN exercise e ON e.id = s.exercise_id "
         "WHERE s.workout_id = ? AND s.set_type = 'normal' "
         "ORDER BY s.logged_at, s.id",
@@ -881,13 +1020,16 @@ def summary_page(request: Request, workout_id: int):
     index = {}
     total_volume_kg = 0.0
     for r in rows:
-        total_volume_kg += r["weight_kg"] * r["reps"]
+        if r["weight_kg"] is not None and r["reps"] is not None:
+            total_volume_kg += r["weight_kg"] * r["reps"]
         if r["exercise_id"] not in index:
             index[r["exercise_id"]] = len(by_exercise)
-            by_exercise.append({"name": r["name"], "unit": r["display_unit"],
+            by_exercise.append({"name": r["name"], "unit": "",
                                 "exercise_id": r["exercise_id"], "sets": []})
         entry = by_exercise[index[r["exercise_id"]]]
-        entry["sets"].append(f"{fmt_weight(r['weight_kg'], r['display_unit'])} × {r['reps']}")
+        cell, suffix = set_cell(r["exercise_type"], r, r["display_unit"])
+        entry["sets"].append(cell)
+        entry["unit"] = suffix
 
     duration = None
     if workout["finished_at"]:

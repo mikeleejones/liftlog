@@ -19,7 +19,8 @@ def export_all(db, exported_at):
             exercises = []
             for re in db.execute(
                 "SELECT re.*, e.name, e.cue, e.youtube_query, e.movement_pattern, "
-                "e.muscle_group, e.increment_kg FROM routine_exercise re "
+                "e.muscle_group, e.exercise_type, e.display_unit, e.increment_kg "
+                "FROM routine_exercise re "
                 "JOIN exercise e ON e.id = re.exercise_id "
                 "WHERE re.routine_id = ? ORDER BY re.position",
                 (r["id"],),
@@ -30,6 +31,8 @@ def export_all(db, exported_at):
                     "youtube_query": re["youtube_query"],
                     "movement_pattern": re["movement_pattern"],
                     "muscle_group": re["muscle_group"],
+                    "exercise_type": re["exercise_type"],
+                    "display_unit": re["display_unit"],
                     "sets": re["target_sets"],
                     "rep_min": re["rep_min"],
                     "rep_max": re["rep_max"],

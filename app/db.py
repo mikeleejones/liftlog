@@ -13,10 +13,15 @@ CREATE TABLE IF NOT EXISTS exercise (
     youtube_query    TEXT NOT NULL DEFAULT '',
     movement_pattern TEXT NOT NULL,
     muscle_group     TEXT NOT NULL,
+    exercise_type    TEXT NOT NULL DEFAULT 'weight_reps'
+                     CHECK (exercise_type IN
+                       ('weight_reps','reps_only','duration','duration_weight',
+                        'distance','distance_weight','none')),
     display_unit     TEXT NOT NULL DEFAULT 'kg'
-                     CHECK (display_unit IN ('kg','lbs')),
+                     CHECK (display_unit IN ('kg','lbs','km','mi')),
     increment_kg     REAL NOT NULL DEFAULT 2.5,
     is_archived      INTEGER NOT NULL DEFAULT 0,
+    progress_reset_at TEXT,
     created_at       TEXT NOT NULL
 );
 
@@ -69,8 +74,10 @@ CREATE TABLE IF NOT EXISTS set_log (
     set_number  INTEGER NOT NULL,
     set_type    TEXT NOT NULL DEFAULT 'normal'
                 CHECK (set_type IN ('normal','warmup','failure')),
-    weight_kg   REAL NOT NULL,
-    reps        INTEGER NOT NULL,
+    weight_kg   REAL,                            -- nullable: only weight-bearing types
+    reps        INTEGER,                         -- nullable: only rep-counted types
+    duration_seconds REAL,                       -- nullable: duration / duration_weight
+    distance_m  REAL,                            -- nullable: distance / distance_weight
     was_suggested INTEGER NOT NULL DEFAULT 0,
     logged_at   TEXT NOT NULL
 );
@@ -166,6 +173,9 @@ def init_db():
         _migrate_to_programs(db, now)
     _migrate_workout_routine_ondelete(db)
     db.executescript(SCHEMA)
+    _migrate_exercise_progress_reset(db)
+    _migrate_exercise_type(db)
+    _migrate_set_log_metrics(db)
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     row = db.execute("SELECT id FROM program_state WHERE id = 1").fetchone()
     if row is None:
@@ -271,6 +281,91 @@ def _migrate_workout_routine_ondelete(db):
             SELECT id, routine_id, started_at, finished_at, is_deload, note FROM workout;
         DROP TABLE workout;
         ALTER TABLE workout_new RENAME TO workout;
+    """)
+    db.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_exercise_progress_reset(db):
+    """Add exercise.progress_reset_at to a pre-v0.5 database. Idempotent: the
+    column defaults to NULL (never reset), so existing exercises keep scanning
+    all history for suggestions until the user resets one."""
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(exercise)")}
+    if "progress_reset_at" not in columns:
+        db.execute("ALTER TABLE exercise ADD COLUMN progress_reset_at TEXT")
+
+
+def _migrate_exercise_type(db):
+    """Add exercise.exercise_type and broaden the display_unit CHECK to allow
+    km/mi. A CHECK constraint can't be altered in place, so rebuild the table;
+    exercise_type is omitted from the INSERT so its DEFAULT 'weight_reps' applies
+    to every existing row — nothing in the current program changes type.
+    Idempotent: returns early once exercise_type exists. Runs after the
+    progress_reset migration, so progress_reset_at is guaranteed present."""
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(exercise)")}
+    if "exercise_type" in columns:
+        return
+    db.execute("PRAGMA foreign_keys = OFF")
+    db.executescript("""
+        CREATE TABLE exercise_new (
+            id               INTEGER PRIMARY KEY,
+            name             TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            cue              TEXT NOT NULL DEFAULT '',
+            youtube_query    TEXT NOT NULL DEFAULT '',
+            movement_pattern TEXT NOT NULL,
+            muscle_group     TEXT NOT NULL,
+            exercise_type    TEXT NOT NULL DEFAULT 'weight_reps'
+                             CHECK (exercise_type IN
+                               ('weight_reps','reps_only','duration','duration_weight',
+                                'distance','distance_weight','none')),
+            display_unit     TEXT NOT NULL DEFAULT 'kg'
+                             CHECK (display_unit IN ('kg','lbs','km','mi')),
+            increment_kg     REAL NOT NULL DEFAULT 2.5,
+            is_archived      INTEGER NOT NULL DEFAULT 0,
+            progress_reset_at TEXT,
+            created_at       TEXT NOT NULL
+        );
+        INSERT INTO exercise_new (id, name, cue, youtube_query, movement_pattern,
+            muscle_group, display_unit, increment_kg, is_archived, progress_reset_at, created_at)
+          SELECT id, name, cue, youtube_query, movement_pattern, muscle_group,
+            display_unit, increment_kg, is_archived, progress_reset_at, created_at FROM exercise;
+        DROP TABLE exercise;
+        ALTER TABLE exercise_new RENAME TO exercise;
+    """)
+    db.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_set_log_metrics(db):
+    """Make set_log.weight_kg and reps nullable and add duration_seconds /
+    distance_m for non-weight_reps exercise types. Dropping NOT NULL requires a
+    table rebuild; existing weight_reps rows copy over unchanged with the two new
+    columns NULL. Idempotent: returns early once duration_seconds exists."""
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(set_log)")}
+    if "duration_seconds" in columns:
+        return
+    db.execute("PRAGMA foreign_keys = OFF")
+    db.executescript("""
+        CREATE TABLE set_log_new (
+            id          INTEGER PRIMARY KEY,
+            workout_id  INTEGER NOT NULL REFERENCES workout(id) ON DELETE CASCADE,
+            exercise_id INTEGER NOT NULL REFERENCES exercise(id),
+            set_number  INTEGER NOT NULL,
+            set_type    TEXT NOT NULL DEFAULT 'normal'
+                        CHECK (set_type IN ('normal','warmup','failure')),
+            weight_kg   REAL,
+            reps        INTEGER,
+            duration_seconds REAL,
+            distance_m  REAL,
+            was_suggested INTEGER NOT NULL DEFAULT 0,
+            logged_at   TEXT NOT NULL
+        );
+        INSERT INTO set_log_new (id, workout_id, exercise_id, set_number, set_type,
+            weight_kg, reps, was_suggested, logged_at)
+          SELECT id, workout_id, exercise_id, set_number, set_type,
+            weight_kg, reps, was_suggested, logged_at FROM set_log;
+        DROP TABLE set_log;
+        ALTER TABLE set_log_new RENAME TO set_log;
+        CREATE INDEX IF NOT EXISTS idx_setlog_exercise ON set_log(exercise_id, logged_at);
+        CREATE INDEX IF NOT EXISTS idx_setlog_workout  ON set_log(workout_id);
     """)
     db.execute("PRAGMA foreign_keys = ON")
 

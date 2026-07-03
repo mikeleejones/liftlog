@@ -14,6 +14,12 @@ MOVEMENT_PATTERNS = {
     "horizontal_push", "vertical_push", "isolation", "core",
 }
 MUSCLE_GROUPS = {"back", "chest", "shoulders", "legs", "glutes", "arms", "core"}
+EXERCISE_TYPES = {
+    "weight_reps", "reps_only", "duration", "duration_weight",
+    "distance", "distance_weight", "none",
+}
+DISPLAY_UNITS = {"kg", "lbs", "km", "mi"}
+DISTANCE_TYPES = {"distance", "distance_weight"}
 
 EXERCISE_DEFAULTS = {
     "cue": "",
@@ -21,6 +27,7 @@ EXERCISE_DEFAULTS = {
     "rest_seconds": 90,
     "increment_kg": 2.5,
     "is_primary": False,
+    "exercise_type": "weight_reps",
 }
 
 FALLBACK_PROGRAM_NAME = "current program"
@@ -133,6 +140,11 @@ def _validate_exercise(ex, where):
     # increment_kg may be 0 for bodyweight / no-load exercises (no progression step)
     if "increment_kg" in ex and (not isinstance(ex["increment_kg"], (int, float)) or ex["increment_kg"] < 0):
         errors.append(f"{where}: increment_kg must be zero or a positive number")
+    # exercise_type/display_unit are optional; default weight_reps + type-appropriate unit
+    if "exercise_type" in ex and ex["exercise_type"] not in EXERCISE_TYPES:
+        errors.append(f"{where}: exercise_type must be one of " + ", ".join(sorted(EXERCISE_TYPES)))
+    if "display_unit" in ex and ex["display_unit"] not in DISPLAY_UNITS:
+        errors.append(f"{where}: display_unit must be one of kg, lbs, km, mi")
     return errors
 
 
@@ -174,6 +186,7 @@ def plan(db, norm):
             exercises.append({
                 "name": ex["name"],
                 "action": "update" if known else "create",
+                "type": ex["exercise_type"],
                 "sets": ex["sets"],
                 "rep_min": ex["rep_min"],
                 "rep_max": ex["rep_max"],
@@ -283,21 +296,42 @@ def _activate(db, program_id, was_active):
         db.execute("UPDATE program_state SET program_week = 1 WHERE id = 1")
 
 
+def _default_unit(ex):
+    """Explicit display_unit wins; otherwise distance types default to km and
+    everything else to kg (kg is harmless/ignored for reps_only/duration/none)."""
+    unit = ex.get("display_unit")
+    if unit in DISPLAY_UNITS:
+        return unit
+    return "km" if ex["exercise_type"] in DISTANCE_TYPES else "kg"
+
+
 def _upsert_exercise(db, ex, now):
+    etype = ex["exercise_type"]
+    provided_unit = ex.get("display_unit") if ex.get("display_unit") in DISPLAY_UNITS else None
     known = db.execute(
         "SELECT id FROM exercise WHERE name = ? COLLATE NOCASE", (ex["name"],)
     ).fetchone()
     if known:
-        db.execute(
-            "UPDATE exercise SET cue = ?, youtube_query = ?, movement_pattern = ?, "
-            "muscle_group = ?, increment_kg = ? WHERE id = ?",
-            (ex["cue"], ex["youtube_query"], ex["movement_pattern"],
-             ex["muscle_group"], float(ex["increment_kg"]), known["id"]),
-        )
+        # update tags + type; only override display_unit when the import states one,
+        # otherwise preserve the user's kg/lbs (or km/mi) toggle
+        if provided_unit:
+            db.execute(
+                "UPDATE exercise SET cue = ?, youtube_query = ?, movement_pattern = ?, "
+                "muscle_group = ?, exercise_type = ?, display_unit = ?, increment_kg = ? WHERE id = ?",
+                (ex["cue"], ex["youtube_query"], ex["movement_pattern"], ex["muscle_group"],
+                 etype, provided_unit, float(ex["increment_kg"]), known["id"]),
+            )
+        else:
+            db.execute(
+                "UPDATE exercise SET cue = ?, youtube_query = ?, movement_pattern = ?, "
+                "muscle_group = ?, exercise_type = ?, increment_kg = ? WHERE id = ?",
+                (ex["cue"], ex["youtube_query"], ex["movement_pattern"], ex["muscle_group"],
+                 etype, float(ex["increment_kg"]), known["id"]),
+            )
         return known["id"]
     return db.execute(
         "INSERT INTO exercise (name, cue, youtube_query, movement_pattern, muscle_group, "
-        "increment_kg, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "exercise_type, display_unit, increment_kg, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ex["name"], ex["cue"], ex["youtube_query"], ex["movement_pattern"],
-         ex["muscle_group"], float(ex["increment_kg"]), now),
+         ex["muscle_group"], etype, _default_unit(ex), float(ex["increment_kg"]), now),
     ).lastrowid

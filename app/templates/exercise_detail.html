@@ -13,11 +13,15 @@
 <div class="exercise-actions">
   <a class="link-chip mono" href="https://www.youtube.com/results?search_query={{ youtube_query | urlencode }}"
      target="_blank" rel="noopener">demo</a>
+  <button class="btn-quiet mono" type="button" id="reset-open">reset progress</button>
 </div>
+{% if exercise.progress_reset_at %}
+<div class="mono muted card-meta reset-note">suggestions reset {{ exercise.progress_reset_at[:10] }} — history below is unaffected</div>
+{% endif %}
 
 {% if chart %}
 <div class="card chart-card">
-  <div class="section-label">top set · {{ unit }}</div>
+  <div class="section-label">top set{% if unit %} · {{ unit }}{% endif %}</div>
   {% include "_chart.html" %}
   <div class="mono muted chart-legend">● PR · dashed = deload</div>
 </div>
@@ -39,4 +43,29 @@
 </div>
 {% endfor %}
 {% endif %}
+
+<div class="sheet-backdrop" id="reset-backdrop" hidden></div>
+<div class="sheet" id="reset-sheet" hidden>
+  <div class="sheet-handle"></div>
+  <div class="section-label">reset progress</div>
+  <div class="mono muted card-meta">History stays visible. Weight and rep suggestions start fresh from your next session.</div>
+  <form method="post" action="{{ base }}/exercise/{{ exercise.id }}/reset-progress">
+    <button class="btn-confirm mono" type="submit">RESET PROGRESS</button>
+  </form>
+  <button class="btn-quiet mono cancel-link" id="reset-cancel" type="button">cancel</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const backdrop = document.getElementById("reset-backdrop");
+  const sheet = document.getElementById("reset-sheet");
+  function close() { sheet.hidden = true; backdrop.hidden = true; }
+  document.getElementById("reset-open").addEventListener("click", () => {
+    sheet.hidden = false; backdrop.hidden = false;
+  });
+  backdrop.addEventListener("click", close);
+  document.getElementById("reset-cancel").addEventListener("click", close);
+})();
+</script>
 {% endblock %}

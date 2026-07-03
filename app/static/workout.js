@@ -8,7 +8,53 @@ const BASE = state.base || "";
 
 const KG_PER_LB = 0.45359237;
 const STEP = { kg: 2.5, lbs: 5 };
+const DIST_STEP = 0.1; // km or mi per stepper tap
+const DURATION_STEP = 5; // seconds per stepper tap
+const M_PER_KM = 1000;
+const M_PER_MI = 1609.344;
 const WARMUP_REST_SECONDS = 60;
+
+// which metric axes each exercise_type shows on Active Workout, in display order
+const TYPE_AXES = {
+  weight_reps: ["weight", "reps"],
+  reps_only: ["reps"],
+  duration: ["duration"],
+  duration_weight: ["weight", "duration"],
+  distance: ["distance"],
+  distance_weight: ["distance", "weight"],
+  none: [],
+};
+
+// the axis whose unit chip is toggleable (weight kg/lbs, or distance km/mi)
+function chipAxisFor(ex) {
+  const t = ex.exercise_type;
+  if (t === "weight_reps" || t === "duration_weight") return "weight";
+  if (t === "distance" || t === "distance_weight") return "distance";
+  return null;
+}
+
+// display_unit names the primary axis; distance_weight's weight axis is fixed kg
+function weightUnit(ex) {
+  return ex.exercise_type === "distance_weight" ? "kg" : ex.display_unit;
+}
+function distanceUnit(ex) {
+  return ex.display_unit; // 'km' or 'mi' for distance / distance_weight
+}
+function distToDisplay(m, unit) {
+  return unit === "mi" ? m / M_PER_MI : m / M_PER_KM;
+}
+function distToM(v, unit) {
+  return unit === "mi" ? v * M_PER_MI : v * M_PER_KM;
+}
+function roundDist(v) {
+  return Math.round(v / DIST_STEP) * DIST_STEP;
+}
+function fmtDur(seconds) {
+  seconds = Math.max(0, Math.round(seconds));
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 const view = document.getElementById("exercise-view");
 const progressEl = document.getElementById("workout-progress");
@@ -60,10 +106,16 @@ function resetPending(ex) {
   const source = inWarmup(ex) ? ex.warmups[ex.warmups_logged] : {
     weight_kg: ex.suggest_weight_kg,
     reps: ex.suggest_reps,
+    duration_seconds: ex.suggest_duration_seconds,
+    distance_m: ex.suggest_distance_m,
   };
+  const wu = weightUnit(ex);
+  const du = distanceUnit(ex);
   pending = {
-    weight: roundLoad(toDisplay(source.weight_kg, ex.display_unit), ex.display_unit),
-    reps: source.reps,
+    weight: source.weight_kg == null ? 0 : roundLoad(toDisplay(source.weight_kg, wu), wu),
+    reps: source.reps == null ? ex.rep_min : source.reps,
+    duration: source.duration_seconds == null ? 0 : source.duration_seconds,
+    distance: source.distance_m == null ? 0 : roundDist(distToDisplay(source.distance_m, du)),
     edited: false,
   };
 }
@@ -90,15 +142,114 @@ function esc(s) {
 
 // ---- render ----
 
+// the suggested primary-metric value as a display string (progress/stall only
+// ever fire for weight_reps and the single-axis reps/duration/distance types)
+function primaryChipValue(ex) {
+  const t = ex.exercise_type;
+  if (t === "weight_reps" || t === "duration_weight")
+    return fmt(roundLoad(toDisplay(ex.suggest_weight_kg, weightUnit(ex)), weightUnit(ex)));
+  if (t === "reps_only") return `${ex.suggest_reps}`;
+  if (t === "duration") return fmtDur(ex.suggest_duration_seconds);
+  if (t === "distance" || t === "distance_weight")
+    return fmt(roundDist(distToDisplay(ex.suggest_distance_m, distanceUnit(ex))));
+  return "";
+}
+function chipUnitSuffix(ex) {
+  const t = ex.exercise_type;
+  if (t === "weight_reps" || t === "duration_weight") return " " + weightUnit(ex);
+  if (t === "distance" || t === "distance_weight") return " " + distanceUnit(ex);
+  return ""; // reps_only, duration — value is self-describing
+}
+
 function suggestChip(ex) {
-  const w = fmt(roundLoad(toDisplay(ex.suggest_weight_kg, ex.display_unit), ex.display_unit));
+  const v = primaryChipValue(ex);
   if (ex.suggest_kind === "progress")
-    return `<span class="chip chip-progress mono">↑ ${w}</span>`;
+    return `<span class="chip chip-progress mono">↑ ${v}</span>`;
   if (ex.suggest_kind === "stall")
-    return `<span class="chip chip-stall mono">stalled: try ${w} ${ex.display_unit}</span>`;
+    return `<span class="chip chip-stall mono">stalled: try ${v}${chipUnitSuffix(ex)}</span>`;
   if (ex.suggest_kind === "deload")
     return `<span class="chip chip-stall mono">deload — 60%</span>`;
   return "";
+}
+
+// text shown in a set's stepper value box, per axis
+function axisValueText(ex, axis) {
+  if (axis === "reps") return String(pending.reps);
+  if (axis === "duration") return fmtDur(pending.duration);
+  if (axis === "weight") return fmt(pending.weight);
+  if (axis === "distance") return fmt(pending.distance);
+  return "";
+}
+
+// one axis fragment of the big value line; the chip axis carries the unit chip
+function axisBigFrag(ex, axis, chipAxis) {
+  if (axis === "reps") return `${pending.reps}`;
+  if (axis === "duration") return fmtDur(pending.duration);
+  if (axis === "weight") {
+    const u = weightUnit(ex);
+    return chipAxis === "weight"
+      ? `${fmt(pending.weight)} <button class="unit-chip" id="unit-chip" type="button">${u}</button>`
+      : `${fmt(pending.weight)} ${u}`;
+  }
+  if (axis === "distance") {
+    const u = distanceUnit(ex);
+    return chipAxis === "distance"
+      ? `${fmt(pending.distance)} <button class="unit-chip" id="unit-chip" type="button">${u}</button>`
+      : `${fmt(pending.distance)} ${u}`;
+  }
+  return "";
+}
+
+function bigValueHtml(ex) {
+  const axes = TYPE_AXES[ex.exercise_type];
+  const chipAxis = chipAxisFor(ex);
+  let out = "";
+  axes.forEach((axis, i) => {
+    const frag = axisBigFrag(ex, axis, chipAxis);
+    if (i === 0) out = frag;
+    else out += (axis === "reps" ? " × " : ` <span class="big-sep">·</span> `) + frag;
+  });
+  return out;
+}
+
+function axisLabel(ex, axis) {
+  if (axis === "reps") return "reps";
+  if (axis === "duration") return "time";
+  if (axis === "weight") return `weight (${weightUnit(ex)})`;
+  if (axis === "distance") return `distance (${distanceUnit(ex)})`;
+  return "";
+}
+
+function stepperBlock(ex, axis) {
+  return `<div>
+    <div class="stepper">
+      <button class="stepper-btn" data-step="${axis}-down" type="button">−</button>
+      <span class="stepper-value" id="${axis}-value">${axisValueText(ex, axis)}</span>
+      <button class="stepper-btn" data-step="${axis}-up" type="button">+</button>
+    </div>
+    <div class="stepper-label">${axisLabel(ex, axis)}</div>
+  </div>`;
+}
+
+// one completed set's summary, mirroring the server's set_cell()
+function setCellText(ex, s) {
+  const t = ex.exercise_type;
+  const wu = weightUnit(ex);
+  if (t === "reps_only") return `${s.reps} reps`;
+  if (t === "duration") return fmtDur(s.duration_seconds);
+  if (t === "distance") return `${fmt(distToDisplay(s.distance_m, ex.display_unit))} ${ex.display_unit}`;
+  if (t === "duration_weight")
+    return `${fmt(toDisplay(s.weight_kg, wu))} ${wu} · ${fmtDur(s.duration_seconds)}`;
+  if (t === "distance_weight")
+    return `${fmt(distToDisplay(s.distance_m, ex.display_unit))} ${ex.display_unit} · ${fmt(s.weight_kg)} kg`;
+  if (t === "none") return "done";
+  return `${fmt(toDisplay(s.weight_kg, wu))} ${wu} × ${s.reps}`; // weight_reps
+}
+
+function logLabel(ex) {
+  if (inWarmup(ex)) return "LOG WARMUP";
+  if (ex.exercise_type === "none") return "MARK DONE";
+  return pending.edited ? "LOG SET" : "DID AS SUGGESTED";
 }
 
 function render() {
@@ -106,6 +257,7 @@ function render() {
   if (!pending) resetPending(ex);
   const warmup = inWarmup(ex);
   const done = exerciseDone(ex);
+  const axes = TYPE_AXES[ex.exercise_type];
 
   progressEl.textContent = allDone()
     ? "all exercises done"
@@ -117,6 +269,10 @@ function render() {
     "https://www.youtube.com/results?search_query=" +
     encodeURIComponent(ex.youtube_query);
 
+  const targetText = ex.exercise_type === "none"
+    ? `mark done · rest ${ex.rest_seconds}s`
+    : `${ex.target_sets} × ${ex.rep_min}${ex.rep_min === ex.rep_max ? "" : "–" + ex.rep_max} · rest ${ex.rest_seconds}s`;
+
   let html = `
     <div class="exercise-panel">
       <div class="header-row">
@@ -124,8 +280,7 @@ function render() {
         ${suggestChip(ex)}
       </div>
       <div class="exercise-cue">${esc(ex.cue)}</div>
-      <div class="exercise-target">${ex.target_sets} × ${ex.rep_min}${ex.rep_min === ex.rep_max ? "" : "–" + ex.rep_max}
-        · rest ${ex.rest_seconds}s</div>
+      <div class="exercise-target">${targetText}</div>
       <div class="exercise-actions">
         <a class="link-chip mono" href="${ytUrl}" target="_blank" rel="noopener">demo</a>
         ${done ? "" : `<button class="link-chip mono" id="swap-btn" type="button">swap</button>`}
@@ -135,7 +290,7 @@ function render() {
           .map(
             (s) => `<div class="done-set">
               <span>set ${s.set_number}</span>
-              <span>${fmt(toDisplay(s.weight_kg, ex.display_unit))} ${ex.display_unit} × ${s.reps}</span>
+              <span>${setCellText(ex, s)}</span>
               <span class="check">done</span>
             </div>`
           )
@@ -147,36 +302,22 @@ function render() {
   } else if (!done) {
     const label = warmup
       ? `warmup ${ex.warmups_logged + 1} of ${ex.warmups.length}`
-      : `set ${ex.sets.length + 1} of ${ex.target_sets}`;
+      : ex.exercise_type === "none"
+        ? "mark complete"
+        : `set ${ex.sets.length + 1} of ${ex.target_sets}`;
+    const bigHtml = axes.length ? `<div class="big-value">${bigValueHtml(ex)}</div>` : "";
+    const steppersHtml = axes.length
+      ? `<div class="steppers">${axes.map((a) => stepperBlock(ex, a)).join("")}</div>`
+      : "";
     html += `
       <div class="current-set">
         <div class="header-row">
           <div class="section-label current-set-label">${label}</div>
           ${warmup ? `<button class="link-chip mono" id="skip-warmups-btn" type="button">skip warmups</button>` : ""}
         </div>
-        <div class="big-value">${fmt(pending.weight)}
-          <button class="unit-chip" id="unit-chip" type="button">${ex.display_unit}</button>
-          × ${pending.reps}</div>
-        <div class="steppers">
-          <div>
-            <div class="stepper">
-              <button class="stepper-btn" data-step="weight-down" type="button">−</button>
-              <span class="stepper-value" id="weight-value">${fmt(pending.weight)}</span>
-              <button class="stepper-btn" data-step="weight-up" type="button">+</button>
-            </div>
-            <div class="stepper-label">weight (${ex.display_unit})</div>
-          </div>
-          <div>
-            <div class="stepper">
-              <button class="stepper-btn" data-step="reps-down" type="button">−</button>
-              <span class="stepper-value" id="reps-value">${pending.reps}</span>
-              <button class="stepper-btn" data-step="reps-up" type="button">+</button>
-            </div>
-            <div class="stepper-label">reps</div>
-          </div>
-        </div>
-        <button class="btn-primary accent-${state.accent}" id="log-btn" type="button">
-          ${warmup ? "LOG WARMUP" : pending.edited ? "LOG SET" : "DID AS SUGGESTED"}</button>
+        ${bigHtml}
+        ${steppersHtml}
+        <button class="btn-primary accent-${state.accent}" id="log-btn" type="button">${logLabel(ex)}</button>
       </div>`;
   } else if (allDone()) {
     html += `<button class="btn-primary accent-${state.accent}" id="finish-inline" type="button">FINISH WORKOUT</button>`;
@@ -188,7 +329,8 @@ function render() {
 
   if (!done && !ex.skipped) {
     document.getElementById("log-btn").addEventListener("click", logSet);
-    document.getElementById("unit-chip").addEventListener("click", toggleUnit);
+    const chip = document.getElementById("unit-chip");
+    if (chip) chip.addEventListener("click", toggleUnit);
     view.querySelectorAll(".stepper-btn").forEach(bindStepper);
     const skipWarmups = document.getElementById("skip-warmups-btn");
     if (skipWarmups)
@@ -209,11 +351,18 @@ function render() {
 
 function applyStep(kind) {
   const ex = state.exercises[currentIndex];
-  const step = STEP[ex.display_unit];
-  if (kind === "weight-up") pending.weight = roundTo2(pending.weight + step);
-  if (kind === "weight-down") pending.weight = Math.max(0, roundTo2(pending.weight - step));
-  if (kind === "reps-up") pending.reps += 1;
-  if (kind === "reps-down") pending.reps = Math.max(1, pending.reps - 1);
+  const [axis, dir] = kind.split("-");
+  const up = dir === "up";
+  if (axis === "weight") {
+    const step = STEP[weightUnit(ex)];
+    pending.weight = Math.max(0, roundTo2(pending.weight + (up ? step : -step)));
+  } else if (axis === "reps") {
+    pending.reps = up ? pending.reps + 1 : Math.max(1, pending.reps - 1);
+  } else if (axis === "duration") {
+    pending.duration = Math.max(0, pending.duration + (up ? DURATION_STEP : -DURATION_STEP));
+  } else if (axis === "distance") {
+    pending.distance = Math.max(0, roundTo2(pending.distance + (up ? DIST_STEP : -DIST_STEP)));
+  }
   pending.edited = true;
   updateValues();
 }
@@ -245,20 +394,16 @@ function bindStepper(btn) {
 // button under the pointer and kill auto-repeat), so update values in place
 function updateValues() {
   const ex = state.exercises[currentIndex];
-  const w = document.getElementById("weight-value");
-  const r = document.getElementById("reps-value");
-  if (w) w.textContent = fmt(pending.weight);
-  if (r) r.textContent = String(pending.reps);
+  TYPE_AXES[ex.exercise_type].forEach((axis) => {
+    const el = document.getElementById(`${axis}-value`);
+    if (el) el.textContent = axisValueText(ex, axis);
+  });
   const big = view.querySelector(".big-value");
-  if (big)
-    big.innerHTML = `${fmt(pending.weight)}
-      <button class="unit-chip" id="unit-chip" type="button">${ex.display_unit}</button>
-      × ${pending.reps}`;
+  if (big) big.innerHTML = bigValueHtml(ex);
   const chip = document.getElementById("unit-chip");
   if (chip) chip.addEventListener("click", toggleUnit);
   const logBtn = document.getElementById("log-btn");
-  if (logBtn && !inWarmup(ex))
-    logBtn.textContent = pending.edited ? "LOG SET" : "DID AS SUGGESTED";
+  if (logBtn) logBtn.textContent = logLabel(ex);
 }
 
 // ---- actions ----
@@ -267,8 +412,14 @@ async function logSet() {
   const ex = state.exercises[currentIndex];
   const warmup = inWarmup(ex);
   const setNumber = warmup ? ex.warmups_logged + 1 : ex.sets.length + 1;
-  const weightKg = toKg(pending.weight, ex.display_unit);
-  const wasSuggested = pending.edited ? 0 : 1;
+  // warmups are always weight+reps; otherwise the type decides which axes to send
+  const axes = warmup ? ["weight", "reps"] : TYPE_AXES[ex.exercise_type];
+  const metrics = { weight_kg: null, reps: null, duration_seconds: null, distance_m: null };
+  if (axes.includes("weight")) metrics.weight_kg = toKg(pending.weight, weightUnit(ex));
+  if (axes.includes("reps")) metrics.reps = pending.reps;
+  if (axes.includes("duration")) metrics.duration_seconds = pending.duration;
+  if (axes.includes("distance")) metrics.distance_m = distToM(pending.distance, distanceUnit(ex));
+
   const btn = document.getElementById("log-btn");
   btn.disabled = true;
   try {
@@ -276,9 +427,8 @@ async function logSet() {
       exercise_id: ex.exercise_id,
       set_number: setNumber,
       set_type: warmup ? "warmup" : "normal",
-      weight_kg: weightKg,
-      reps: pending.reps,
-      was_suggested: wasSuggested,
+      was_suggested: pending.edited ? 0 : 1,
+      ...metrics,
     });
   } catch (err) {
     btn.disabled = false;
@@ -289,10 +439,12 @@ async function logSet() {
     ex.warmups_logged += 1;
     startTimer(WARMUP_REST_SECONDS);
   } else {
-    ex.sets.push({ set_number: setNumber, weight_kg: weightKg, reps: pending.reps });
-    // carry what was actually done as the suggestion for the next set
-    ex.suggest_weight_kg = weightKg;
-    ex.suggest_reps = pending.reps;
+    ex.sets.push({ set_number: setNumber, ...metrics });
+    // carry what was actually done as the pre-fill for the next set
+    ex.suggest_weight_kg = metrics.weight_kg;
+    ex.suggest_reps = metrics.reps;
+    ex.suggest_duration_seconds = metrics.duration_seconds;
+    ex.suggest_distance_m = metrics.distance_m;
     startTimer(ex.rest_seconds);
     if (ex.sets.length >= ex.target_sets) advance();
   }
@@ -314,10 +466,20 @@ function advance() {
 
 async function toggleUnit() {
   const ex = state.exercises[currentIndex];
-  const next = ex.display_unit === "kg" ? "lbs" : "kg";
+  const axis = chipAxisFor(ex);
   const prev = ex.display_unit;
-  ex.display_unit = next;
-  pending.weight = roundLoad(toDisplay(toKg(pending.weight, prev), next), next);
+  let next;
+  if (axis === "weight") {
+    next = prev === "kg" ? "lbs" : "kg";
+    ex.display_unit = next;
+    pending.weight = roundLoad(toDisplay(toKg(pending.weight, prev), next), next);
+  } else if (axis === "distance") {
+    next = prev === "km" ? "mi" : "km";
+    ex.display_unit = next;
+    pending.distance = roundDist(distToDisplay(distToM(pending.distance, prev), next));
+  } else {
+    return;
+  }
   render();
   try {
     await api(`/api/exercise/${ex.exercise_id}/unit`, { unit: next });

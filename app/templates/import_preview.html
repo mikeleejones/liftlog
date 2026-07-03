@@ -24,7 +24,8 @@
   <div class="routine-lines mono muted">
     {% for ex in r.exercises %}
     <div class="routine-line">
-      <span>{{ ex.name }}{% if ex.is_primary %} <span class="import-primary">primary</span>{% endif %}</span>
+      <span>{{ ex.name }}{% if ex.is_primary %} <span class="import-primary">primary</span>{% endif %}
+        {%- if ex.type != 'weight_reps' %} <span class="import-primary">{{ ex.type }}</span>{% endif %}</span>
       <span>{{ ex.sets }} × {{ ex.rep_min }}–{{ ex.rep_max }}
         · {{ 'update' if ex.action == 'update' else 'new' }}</span>
     </div>
