@@ -8,9 +8,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, catalog, charts, exporter, importer, progression
+from . import ai, auth, charts, exporter, importer, progression
 from .config import SECRET
-from .db import get_db, init_db, run_week_completion, sessions_required, utcnow
+from .db import can_make_ai_call, get_db, init_db, run_week_completion, sessions_required, utcnow
 
 if not SECRET:
     sys.exit("LIFTLOG_SECRET is not set. Put it in the environment or a .env file, then restart.")
@@ -630,7 +630,22 @@ def settings_page(request: Request):
         "completed_weeks": state["completed_weeks"],
         "deload_deferred": bool(state["deload_deferred_until"] and state["deload_deferred_until"] > now),
         "counts": counts,
+        "objective": state["objective"] or "",
     })
+
+
+@app.post("/settings/objective")
+def save_objective(request: Request, objective: str = Form("")):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    db.execute(
+        "UPDATE program_state SET objective = ? WHERE id = 1",
+        (objective.strip() or None,),
+    )
+    db.commit()
+    db.close()
+    return redirect(request, "/settings")
 
 
 @app.get("/export")
@@ -813,60 +828,180 @@ async def log_set(request: Request, workout_id: int):
     return {"ok": True}
 
 
-@app.get("/api/workout/{workout_id}/substitutes/{planned_exercise_id}")
-def substitutes(request: Request, workout_id: int, planned_exercise_id: int,
-                current: int = 0):
+def _swap_program_context(db, workout):
+    """The active-context program's routines + their exercise names, for the
+    Haiku prompt. Uses the workout's routine's program, falling back to the
+    active program (ad-hoc workout)."""
+    program_id = None
+    if workout["routine_id"]:
+        row = db.execute(
+            "SELECT program_id FROM routine WHERE id = ?", (workout["routine_id"],)
+        ).fetchone()
+        program_id = row["program_id"] if row else None
+    if program_id is None:
+        active = db.execute("SELECT id FROM program WHERE is_active = 1").fetchone()
+        program_id = active["id"] if active else None
+    if program_id is None:
+        return None, []
+    routines = []
+    for r in db.execute(
+        "SELECT id, name FROM routine WHERE program_id = ? AND is_archived = 0 "
+        "ORDER BY week_number, position, id",
+        (program_id,),
+    ):
+        names = [
+            row["name"] for row in db.execute(
+                "SELECT e.name FROM routine_exercise re JOIN exercise e ON e.id = re.exercise_id "
+                "WHERE re.routine_id = ? ORDER BY re.position",
+                (r["id"],),
+            )
+        ]
+        routines.append({"name": r["name"], "exercises": names})
+    return program_id, routines
+
+
+@app.get("/api/workout/{workout_id}/swap/{planned_exercise_id}")
+def swap_previously_used(request: Request, workout_id: int, planned_exercise_id: int,
+                         current: int = 0):
+    """The 'previously used' section: actual past swaps recorded for this slot.
+    Renders instantly, zero cost, can be empty."""
+    if not auth.is_authed(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    db = get_db()
+    rows = db.execute(
+        "SELECT e.id, e.name, MAX(w.started_at) AS last_used "
+        "FROM substitution s JOIN workout w ON w.id = s.workout_id "
+        "JOIN exercise e ON e.id = s.actual_exercise_id "
+        "WHERE s.planned_exercise_id = ? AND s.actual_exercise_id IS NOT NULL "
+        "AND e.is_archived = 0 AND e.id != ? "
+        "GROUP BY e.id ORDER BY last_used DESC",
+        (planned_exercise_id, current or 0),
+    ).fetchall()
+    db.close()
+    return {"previously_used": [
+        {"id": r["id"], "name": r["name"], "last_used": r["last_used"]} for r in rows
+    ]}
+
+
+@app.post("/api/workout/{workout_id}/ai-suggestions/{planned_exercise_id}")
+def ai_suggestions(request: Request, workout_id: int, planned_exercise_id: int):
+    """'Get AI Suggestions' / 'Refresh': serve 3 unshown cached suggestions
+    instantly, or call Haiku for the shortfall (guarded by the 100/day cap)."""
     if not auth.is_authed(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     db = get_db()
     workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
-    if workout is None:
+    planned = db.execute(
+        "SELECT * FROM exercise WHERE id = ?", (planned_exercise_id,)
+    ).fetchone()
+    if workout is None or planned is None:
         db.close()
-        return JSONResponse({"error": "no such workout"}, status_code=404)
-    # never suggest what's already in play this workout: the exercise being
-    # swapped, earlier swap targets, or anything with sets logged today
-    exclude = {current} if current else set()
-    for r in db.execute(
-        "SELECT actual_exercise_id AS id FROM substitution "
-        "WHERE workout_id = ? AND actual_exercise_id IS NOT NULL "
-        "UNION SELECT DISTINCT exercise_id FROM set_log WHERE workout_id = ?",
-        (workout_id, workout_id),
-    ):
-        exclude.add(r["id"])
-    candidates = progression.substitution_candidates(
-        db, planned_exercise_id, workout["routine_id"], exclude_ids=exclude
-    )
-    result = [
-        {
-            "id": c["id"],
-            "name": c["name"],
-            "movement_pattern": c["movement_pattern"],
-            "muscle_group": c["muscle_group"],
-            "last_used": c["last_used"],
-            "from_catalog": False,
-        }
-        for c in candidates
-    ]
-    if len(result) < 3:
-        planned = db.execute(
-            "SELECT * FROM exercise WHERE id = ?", (planned_exercise_id,)
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    unshown = db.execute(
+        "SELECT id, suggestion_json FROM ai_suggestion_cache "
+        "WHERE planned_exercise_id = ? AND shown_at IS NULL ORDER BY created_at LIMIT 3",
+        (planned_exercise_id,),
+    ).fetchall()
+
+    if len(unshown) < 3:
+        # need a real Haiku call for the shortfall — guardrail check first
+        if not can_make_ai_call(db):
+            db.close()
+            return {"state": "limit",
+                    "message": "daily suggestion limit reached — try again later"}
+        need = 3 - len(unshown)
+        # exclusion list: every name ever cached for this slot (shown or not)
+        exclusions = set()
+        for row in db.execute(
+            "SELECT suggestion_json FROM ai_suggestion_cache WHERE planned_exercise_id = ?",
+            (planned_exercise_id,),
+        ):
+            try:
+                exclusions.add(json.loads(row["suggestion_json"])["name"])
+            except (ValueError, KeyError, TypeError):
+                pass
+        _, program_routines = _swap_program_context(db, workout)
+        objective_row = db.execute(
+            "SELECT objective FROM program_state WHERE id = 1"
         ).fetchone()
-        exclude_names = {c["name"] for c in result}
-        for entry in catalog.suggestions(db, planned, exclude_names, 3 - len(result)):
-            result.append({
-                "id": None,
-                "name": entry["name"],
-                "movement_pattern": entry["movement_pattern"],
-                "muscle_group": entry["muscle_group"],
-                "last_used": None,
-                "from_catalog": True,
-            })
+        objective = objective_row["objective"] if objective_row else None
+        now = utcnow()
+        # record the actual call BEFORE making it — one row per real attempt, so a
+        # stuck retry loop still counts against the 100/day guardrail
+        db.execute("INSERT INTO ai_call_log (created_at) VALUES (?)", (now,))
+        db.commit()
+        try:
+            fresh = ai.fetch_suggestions(
+                dict(planned), objective, program_routines, exclusions, need
+            )
+        except (ai.AICallError, ai.AIValidationError):
+            db.close()
+            return {"state": "error", "message": "couldn't get suggestions, try again"}
+        for s in fresh:
+            db.execute(
+                "INSERT INTO ai_suggestion_cache (planned_exercise_id, suggestion_json, "
+                "created_at, shown_at) VALUES (?, ?, ?, NULL)",
+                (planned_exercise_id, json.dumps(s), now),
+            )
+        db.commit()
+        unshown = db.execute(
+            "SELECT id, suggestion_json FROM ai_suggestion_cache "
+            "WHERE planned_exercise_id = ? AND shown_at IS NULL ORDER BY created_at LIMIT 3",
+            (planned_exercise_id,),
+        ).fetchall()
+
+    # mark the ones we're about to show, so they're never re-served as "new"
+    now = utcnow()
+    result = []
+    for row in unshown:
+        db.execute(
+            "UPDATE ai_suggestion_cache SET shown_at = ? WHERE id = ?", (now, row["id"])
+        )
+        s = json.loads(row["suggestion_json"])
+        result.append({
+            "cache_id": row["id"],
+            "name": s["name"],
+            "reason": s["reason"],
+            "movement_pattern": s["movement_pattern"],
+            "muscle_group": s["muscle_group"],
+            "equipment": s["equipment"],
+            "exercise_type": s["exercise_type"],
+            "youtube_query": s["youtube_query"],
+        })
+    db.commit()
     db.close()
-    return {"candidates": result}
+    if not result:
+        return {"state": "error", "message": "couldn't get suggestions, try again"}
+    return {"state": "ok", "suggestions": result}
+
+
+def _ai_exercise(db, suggestion, now):
+    """Find-or-create a library exercise from a validated AI suggestion. AI
+    suggestions carry every tag the library needs. Returns the exercise row."""
+    existing = db.execute(
+        "SELECT * FROM exercise WHERE name = ? COLLATE NOCASE", (suggestion["name"],)
+    ).fetchone()
+    if existing:
+        return existing
+    etype = suggestion["exercise_type"]
+    unit = "km" if etype in ("distance", "distance_weight") else "kg"
+    new_id = db.execute(
+        "INSERT INTO exercise (name, cue, youtube_query, movement_pattern, muscle_group, "
+        "exercise_type, equipment, display_unit, increment_kg, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2.5, ?)",
+        (suggestion["name"], suggestion["cue"], suggestion["youtube_query"],
+         suggestion["movement_pattern"], suggestion["muscle_group"], etype,
+         suggestion["equipment"], unit, now),
+    ).lastrowid
+    return db.execute("SELECT * FROM exercise WHERE id = ?", (new_id,)).fetchone()
 
 
 @app.post("/api/workout/{workout_id}/substitute")
 async def substitute(request: Request, workout_id: int):
+    """Apply a swap. Input is one of: {skip}, {cache_id, permanent} (AI pick), or
+    {actual_exercise_id, permanent} (previously-used pick). One-time records only a
+    substitution; permanent also repoints the routine_exercise slot."""
     if not auth.is_authed(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await request.json()
@@ -894,37 +1029,19 @@ async def substitute(request: Request, workout_id: int):
         return {"skipped": True}
 
     now = utcnow()
-    if body.get("new_name"):
-        name = body["new_name"].strip()
-        if not name:
-            db.close()
-            return JSONResponse({"error": "empty name"}, status_code=400)
-        actual = db.execute(
-            "SELECT * FROM exercise WHERE name = ? COLLATE NOCASE", (name,)
+    if body.get("cache_id") is not None:
+        # AI pick: create the library exercise from the cached suggestion if new
+        cached = db.execute(
+            "SELECT suggestion_json FROM ai_suggestion_cache WHERE id = ? "
+            "AND planned_exercise_id = ?",
+            (int(body["cache_id"]), planned_id),
         ).fetchone()
-        if actual is None:
-            # catalog names bring their own tags; typed names inherit the
-            # planned exercise's
-            planned = db.execute(
-                "SELECT * FROM exercise WHERE id = ?", (planned_id,)
-            ).fetchone()
-            known = catalog.lookup(name)
-            if known:
-                pattern, group, yt = known
-            else:
-                pattern, group, yt = (planned["movement_pattern"],
-                                      planned["muscle_group"], f"{name.lower()} form")
-            # inherit the planned exercise's type/unit so a swapped-in stretch,
-            # hold, or carry keeps the right input control (not weight_reps + km)
-            actual_id = db.execute(
-                "INSERT INTO exercise (name, cue, youtube_query, movement_pattern, "
-                "muscle_group, exercise_type, display_unit, increment_kg, created_at) "
-                "VALUES (?, '', ?, ?, ?, ?, ?, ?, ?)",
-                (name, yt, pattern, group, planned["exercise_type"],
-                 planned["display_unit"], planned["increment_kg"], now),
-            ).lastrowid
-            actual = db.execute("SELECT * FROM exercise WHERE id = ?", (actual_id,)).fetchone()
+        if cached is None:
+            db.close()
+            return JSONResponse({"error": "no such suggestion"}, status_code=404)
+        actual = _ai_exercise(db, json.loads(cached["suggestion_json"]), now)
     else:
+        # previously-used pick: an existing library exercise
         actual = db.execute(
             "SELECT * FROM exercise WHERE id = ?", (int(body["actual_exercise_id"]),)
         ).fetchone()
@@ -941,6 +1058,13 @@ async def substitute(request: Request, workout_id: int):
         "SELECT * FROM routine_exercise WHERE routine_id = ? AND exercise_id = ?",
         (workout["routine_id"], planned_id),
     ).fetchone()
+    # permanent swap: repoint the routine_exercise slot to the new exercise,
+    # leaving sets/reps/rest/is_primary untouched
+    if body.get("permanent") and re:
+        db.execute(
+            "UPDATE routine_exercise SET exercise_id = ? WHERE id = ?",
+            (actual["id"], re["id"]),
+        )
     target_sets = re["target_sets"] if re else 3
     rep_min = re["rep_min"] if re else 8
     rep_max = re["rep_max"] if re else 12

@@ -282,6 +282,11 @@ body {
 .sub-new { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .sub-new-input { flex: 1; height: 44px; font-size: 15px; }
 .sub-meta { font-size: 12px; }
+.sub-section { margin-top: 4px; }
+.sub-btn { display: flex; width: 100%; margin-top: 12px; }
+.sub-card { text-align: left; }
+.sub-card .sub-meta { display: inline-block; margin-top: 2px; }
+.sub-demo { flex: none; align-self: center; margin-left: 12px; }
 
 /* login */
 .login-wrap { padding-top: 30vh; }

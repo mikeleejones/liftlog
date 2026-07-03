@@ -582,43 +582,122 @@ function openSheet() {
 document.getElementById("jump-btn").addEventListener("click", openSheet);
 
 // ---- substitution sheet ----
+// Swap sheet = "previously used" (instant, from substitution table) + AI
+// suggestions (Claude Haiku, cached per exercise). No rule-based list.
+
+let subPending = null; // the pick awaiting a one-time / permanent choice
+
+function showSubMain() {
+  document.getElementById("sub-main").hidden = false;
+  document.getElementById("sub-confirm").hidden = true;
+}
 
 async function openSubSheet() {
   const ex = state.exercises[currentIndex];
   closeAllSheets();
+  subPending = null;
+  showSubMain();
   document.getElementById("sub-title").textContent = `swap ${ex.name.toLowerCase()}`;
-  document.getElementById("sub-new-name").value = "";
-  const list = document.getElementById("sub-list");
-  list.innerHTML = `<div class="mono muted card-meta">finding alternatives…</div>`;
+  document.getElementById("sub-ai").innerHTML = "";
+  const aiBtn = document.getElementById("sub-ai-btn");
+  aiBtn.textContent = "get ai suggestions";
+  aiBtn.disabled = false;
+  const prev = document.getElementById("sub-prev");
+  prev.innerHTML = `<div class="mono muted card-meta">loading…</div>`;
   subSheet.hidden = false;
   backdrop.hidden = false;
   const res = await fetch(
-    `${BASE}/api/workout/${state.workout_id}/substitutes/${ex.planned_exercise_id}?current=${ex.exercise_id}`
+    `${BASE}/api/workout/${state.workout_id}/swap/${ex.planned_exercise_id}?current=${ex.exercise_id}`
   );
   if (!res.ok) {
-    list.innerHTML = `<div class="mono muted card-meta">could not load alternatives</div>`;
+    prev.innerHTML = `<div class="mono muted card-meta">could not load</div>`;
     return;
   }
   const data = await res.json();
-  list.innerHTML = data.candidates
-    .map((c, i) => {
-      const meta = c.from_catalog
-        ? `${c.movement_pattern} · ${c.muscle_group} · not in library yet`
-        : `${c.movement_pattern} · ${c.muscle_group} · ${c.last_used ? "used " + c.last_used.slice(0, 10) : "never used"}`;
-      const attr = c.from_catalog ? `data-sub-new="${esc(c.name)}"` : `data-sub="${c.id}"`;
-      return `<button class="jump-row" ${attr} type="button">
-        <span>${esc(c.name)}<br>
-          <span class="mono muted sub-meta">${meta}</span></span>
-        ${c.from_catalog ? `<span class="mono muted sub-meta">new</span>` : ""}
-      </button>`;
+  renderPrev(data.previously_used || []);
+}
+
+function renderPrev(list) {
+  const prev = document.getElementById("sub-prev");
+  if (!list.length) {
+    prev.innerHTML = `<div class="mono muted card-meta">none yet</div>`;
+    return;
+  }
+  prev.innerHTML = list
+    .map((p) =>
+      `<button class="jump-row" data-prev="${p.id}" data-name="${esc(p.name)}" type="button">
+        <span>${esc(p.name)}</span>
+        <span class="mono muted sub-meta">${p.last_used ? "used " + p.last_used.slice(0, 10) : ""}</span>
+      </button>`
+    )
+    .join("");
+  prev.querySelectorAll("[data-prev]").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      promptChoice({ actual_exercise_id: Number(btn.dataset.prev) }, btn.dataset.name)
+    )
+  );
+}
+
+async function loadAiSuggestions() {
+  const ex = state.exercises[currentIndex];
+  const aiBtn = document.getElementById("sub-ai-btn");
+  const list = document.getElementById("sub-ai");
+  aiBtn.disabled = true;
+  aiBtn.textContent = "thinking…";
+  list.innerHTML = `<div class="mono muted card-meta">finding suggestions…</div>`;
+  let data;
+  try {
+    data = await api(`/api/workout/${state.workout_id}/ai-suggestions/${ex.planned_exercise_id}`, {});
+  } catch (err) {
+    list.innerHTML = `<div class="mono muted card-meta">couldn't get suggestions, try again</div>`;
+    aiBtn.textContent = "get ai suggestions";
+    aiBtn.disabled = false;
+    return;
+  }
+  if (data.state === "limit") {
+    list.innerHTML = `<div class="mono muted card-meta">${esc(data.message)}</div>`;
+    aiBtn.textContent = "get ai suggestions";
+    aiBtn.disabled = true; // guardrail hit — Previously Used stays available
+    return;
+  }
+  if (data.state !== "ok" || !data.suggestions || !data.suggestions.length) {
+    list.innerHTML = `<div class="mono muted card-meta">${esc((data && data.message) || "couldn't get suggestions, try again")}</div>`;
+    aiBtn.textContent = "get ai suggestions";
+    aiBtn.disabled = false;
+    return;
+  }
+  list.innerHTML = data.suggestions
+    .map((s) => {
+      const yt =
+        "https://www.youtube.com/results?search_query=" +
+        encodeURIComponent(s.youtube_query || s.name + " form");
+      return `<div class="jump-row sub-card" data-cache="${s.cache_id}" data-name="${esc(s.name)}">
+        <span>${esc(s.name)}<br>
+          <span class="mono muted sub-meta">${esc(s.reason)}</span><br>
+          <span class="mono muted sub-meta">${esc(s.movement_pattern)} · ${esc(s.muscle_group)} · ${esc(s.equipment)}</span>
+        </span>
+        <a class="link-chip mono sub-demo" href="${yt}" target="_blank" rel="noopener">demo</a>
+      </div>`;
     })
-    .join("") || `<div class="mono muted card-meta">no alternatives available</div>`;
-  list.querySelectorAll("[data-sub]").forEach((btn) =>
-    btn.addEventListener("click", () => applySubstitute({ actual_exercise_id: Number(btn.dataset.sub) }))
+    .join("");
+  // the demo link opens YouTube without triggering the pick
+  list.querySelectorAll(".sub-demo").forEach((a) =>
+    a.addEventListener("click", (e) => e.stopPropagation())
   );
-  list.querySelectorAll("[data-sub-new]").forEach((btn) =>
-    btn.addEventListener("click", () => applySubstitute({ new_name: btn.dataset.subNew }))
+  list.querySelectorAll("[data-cache]").forEach((card) =>
+    card.addEventListener("click", () =>
+      promptChoice({ cache_id: Number(card.dataset.cache) }, card.dataset.name)
+    )
   );
+  aiBtn.textContent = "refresh";
+  aiBtn.disabled = false;
+}
+
+function promptChoice(pick, name) {
+  subPending = pick;
+  document.getElementById("sub-confirm-name").textContent = name;
+  document.getElementById("sub-main").hidden = true;
+  document.getElementById("sub-confirm").hidden = false;
 }
 
 async function applySubstitute(choice) {
@@ -637,17 +716,25 @@ async function applySubstitute(choice) {
     data.exercise.warmupsSkipped = false;
     state.exercises[currentIndex] = data.exercise;
   }
+  subPending = null;
   pending = null;
   closeAllSheets();
   render();
 }
 
+document.getElementById("sub-ai-btn").addEventListener("click", loadAiSuggestions);
 document.getElementById("sub-skip-btn").addEventListener("click", () => applySubstitute({ skip: true }));
-document.getElementById("sub-new-btn").addEventListener("click", () => {
-  const name = document.getElementById("sub-new-name").value.trim();
-  if (name) applySubstitute({ new_name: name });
-});
 document.getElementById("sub-cancel-btn").addEventListener("click", closeAllSheets);
+document.getElementById("sub-confirm-once").addEventListener("click", () => {
+  if (subPending) applySubstitute({ ...subPending, permanent: false });
+});
+document.getElementById("sub-confirm-perm").addEventListener("click", () => {
+  if (subPending) applySubstitute({ ...subPending, permanent: true });
+});
+document.getElementById("sub-confirm-back").addEventListener("click", () => {
+  subPending = null;
+  showSubMain();
+});
 
 // ---- finish confirmation (only when the workout is incomplete) ----
 

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS exercise (
     increment_kg     REAL NOT NULL DEFAULT 2.5,
     is_archived      INTEGER NOT NULL DEFAULT 0,
     progress_reset_at TEXT,
+    equipment        TEXT,                          -- nullable; used by AI substitution context
     created_at       TEXT NOT NULL
 );
 
@@ -98,9 +99,30 @@ CREATE TABLE IF NOT EXISTS program_state (
     weeks_since_deload     INTEGER NOT NULL DEFAULT 0,
     deload_deferred_until  TEXT,
     week_anchor            TEXT NOT NULL,
-    program_week           INTEGER NOT NULL DEFAULT 1
+    program_week           INTEGER NOT NULL DEFAULT 1,
+    objective              TEXT                      -- nullable; free-text program goal, AI context
+);
+
+-- Per-exercise AI substitution suggestion cache. Never expires in v1. One row
+-- per cached suggestion; shown_at is NULL until displayed once, so cached-but-
+-- unseen suggestions can be served instantly without a new API call.
+CREATE TABLE IF NOT EXISTS ai_suggestion_cache (
+    id                  INTEGER PRIMARY KEY,
+    planned_exercise_id INTEGER NOT NULL REFERENCES exercise(id),
+    suggestion_json     TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    shown_at            TEXT
+);
+
+-- One row per ACTUAL Haiku API call (not per suggestion, not on cache hits).
+-- Backs the 100-calls-per-rolling-24h guardrail (see can_make_ai_call).
+CREATE TABLE IF NOT EXISTS ai_call_log (
+    id         INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL
 );
 """
+
+AI_CALLS_PER_DAY_LIMIT = 100
 
 # v0.1: the one hardcoded routine for gym testing. Replaced by JSON import in v0.2.
 SEED_ROUTINE = {
@@ -176,6 +198,8 @@ def init_db():
     _migrate_exercise_progress_reset(db)
     _migrate_exercise_type(db)
     _migrate_set_log_metrics(db)
+    _migrate_exercise_equipment(db)
+    _migrate_program_state_objective(db)
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     row = db.execute("SELECT id FROM program_state WHERE id = 1").fetchone()
     if row is None:
@@ -368,6 +392,36 @@ def _migrate_set_log_metrics(db):
         CREATE INDEX IF NOT EXISTS idx_setlog_workout  ON set_log(workout_id);
     """)
     db.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_exercise_equipment(db):
+    """Add exercise.equipment (nullable) to a pre-item-4 database. Idempotent:
+    a simple ADD COLUMN, defaults to NULL. Existing exercises pick up an
+    equipment value on their next JSON re-import (import updates it on
+    name-match, same as cue/youtube_query)."""
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(exercise)")}
+    if "equipment" not in columns:
+        db.execute("ALTER TABLE exercise ADD COLUMN equipment TEXT")
+
+
+def _migrate_program_state_objective(db):
+    """Add program_state.objective (nullable) to a pre-item-4 database.
+    Idempotent: a simple ADD COLUMN, defaults to NULL until set via Settings."""
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(program_state)")}
+    if "objective" not in columns:
+        db.execute("ALTER TABLE program_state ADD COLUMN objective TEXT")
+
+
+def can_make_ai_call(db):
+    """True when fewer than AI_CALLS_PER_DAY_LIMIT actual Haiku calls have been
+    logged in ai_call_log in the last rolling 24 hours. The 100/day guardrail
+    from BACKLOG item 4. Session B logs a row on every real API call (not on
+    cache hits) and checks this before calling out."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    count = db.execute(
+        "SELECT COUNT(*) FROM ai_call_log WHERE created_at > ?", (cutoff,)
+    ).fetchone()[0]
+    return count < AI_CALLS_PER_DAY_LIMIT
 
 
 def _seed(db, now):

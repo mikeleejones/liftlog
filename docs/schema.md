@@ -30,6 +30,7 @@ CREATE TABLE exercise (
     increment_kg     REAL NOT NULL DEFAULT 2.5,     -- progression step in kg; 0 = bodyweight / no-load (no load progression or stall reset)
     is_archived      INTEGER NOT NULL DEFAULT 0,    -- hidden from pickers, history kept
     progress_reset_at TEXT,                          -- NULL = never reset; soft reset marker (see below)
+    equipment        TEXT,                           -- nullable; free text (e.g. 'barbell', 'cable'). AI-created exercises always populate this; existing exercises pick it up on next JSON re-import (import updates it on name-match, like cue/youtube_query). Sent to Haiku as context for AI substitution suggestions.
     created_at       TEXT NOT NULL
 );
 ```
@@ -61,8 +62,10 @@ data). `reps_only`, `duration`, and `none` have no unit at all.
 `muscle_group` enum (app-enforced): `back`, `chest`, `shoulders`, `legs`,
 `glutes`, `arms`, `core`.
 
-Substitution ranking uses: same `movement_pattern` first, then same
-`muscle_group`, tie-broken by "has prior set_log history" then recency.
+The swap sheet surfaces `substitution` history ("previously used") plus
+AI-suggested alternatives (Claude Haiku, cached per exercise in
+`ai_suggestion_cache`) — there is no rule-based movement_pattern/muscle_group
+ranking (superseded per CLAUDE.md decision log item 5 / BACKLOG item 4).
 
 ### program
 A named set of routines spanning one or more weeks, repeated on a weekly
@@ -203,7 +206,8 @@ CREATE TABLE program_state (
     weeks_since_deload     INTEGER NOT NULL DEFAULT 0,
     deload_deferred_until  TEXT,                        -- NULL = not deferred
     week_anchor            TEXT NOT NULL,               -- date the current week started
-    program_week           INTEGER NOT NULL DEFAULT 1   -- current week within the active program's cycle
+    program_week           INTEGER NOT NULL DEFAULT 1,  -- current week within the active program's cycle
+    objective              TEXT                         -- nullable; free text describing the program's goal (e.g. "HYROX prep, back-friendly, full-body balanced, progressive overload"). Set via Settings. Sent as context on every Haiku call so AI substitution suggestions stay aligned with intent, not just equipment/pattern matching.
 );
 ```
 
@@ -216,6 +220,39 @@ incomplete week repeats its `program_week`. Roll `week_anchor` forward either
 way. `weeks_since_deload >= 3` triggers the deload banner for the next week
 (making deload every 4th completed week). Activating a different program
 resets `program_week` to 1.
+
+### ai_suggestion_cache
+Per-exercise cache of AI substitution suggestions (BACKLOG item 4). Never
+expires in v1 — a good suggestion from months ago is still there next time the
+exercise needs a swap. One row per cached suggestion.
+
+```sql
+CREATE TABLE ai_suggestion_cache (
+    id                  INTEGER PRIMARY KEY,
+    planned_exercise_id INTEGER NOT NULL REFERENCES exercise(id),
+    suggestion_json     TEXT NOT NULL,   -- full validated suggestion object (name, reason, movement_pattern, muscle_group, equipment, exercise_type, cue, youtube_query) as a JSON string
+    created_at          TEXT NOT NULL,
+    shown_at            TEXT             -- NULL until displayed to the user once, then a timestamp
+);
+```
+
+`shown_at` is what lets a repeat swap attempt on the same exercise show
+cached-but-unseen suggestions instantly instead of making a new API call.
+Every name ever cached for an exercise (shown or not) is sent to Haiku as an
+exclusion list on each fresh call, so no true duplicate is ever served across
+the exercise's lifetime.
+
+### ai_call_log
+One row per ACTUAL Haiku API call — not one row per suggestion, and never
+incremented on a cache hit. Backs the guardrail of at most 100 real calls per
+rolling 24 hours (`can_make_ai_call()` in `db.py`).
+
+```sql
+CREATE TABLE ai_call_log (
+    id         INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+```
 
 ---
 
@@ -289,6 +326,7 @@ Active Workout screen updates `exercise.display_unit` persistently.
             "movement_pattern": "hinge",
             "muscle_group": "legs",
             "exercise_type": "weight_reps",
+            "equipment": "barbell",
             "sets": 3, "rep_min": 8, "rep_max": 10,
             "rest_seconds": 120,
             "increment_kg": 2.5,
@@ -320,11 +358,16 @@ Same shape without the program envelope: `{"version": 1, "routines": [...]}`.
 Routines are upserted into the active program at week 1 (an active program is
 created if none exists); nothing is archived.
 
+`equipment` is optional per exercise (nullable free text). It follows the same
+update-on-name-match semantics as cue/youtube_query/tags: a matched exercise
+has its equipment updated (history untouched); an unknown exercise is created
+with the provided equipment, or NULL when omitted.
+
 ### Shared exercise semantics
 
-Exercise matched by name (case-insensitive) -> update cue/query/tags, never
-touch history; unknown exercise -> create. Full-database export is the same
-shape plus `workouts`, `set_logs`, `substitutions`, `program_state`.
+Exercise matched by name (case-insensitive) -> update cue/query/tags/equipment,
+never touch history; unknown exercise -> create. Full-database export is the
+same shape plus `workouts`, `set_logs`, `substitutions`, `program_state`.
 
 ## Non-goals encoded in this schema
 

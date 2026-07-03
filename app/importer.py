@@ -28,6 +28,7 @@ EXERCISE_DEFAULTS = {
     "increment_kg": 2.5,
     "is_primary": False,
     "exercise_type": "weight_reps",
+    "equipment": None,
 }
 
 FALLBACK_PROGRAM_NAME = "current program"
@@ -145,6 +146,9 @@ def _validate_exercise(ex, where):
         errors.append(f"{where}: exercise_type must be one of " + ", ".join(sorted(EXERCISE_TYPES)))
     if "display_unit" in ex and ex["display_unit"] not in DISPLAY_UNITS:
         errors.append(f"{where}: display_unit must be one of kg, lbs, km, mi")
+    # equipment is optional free text (update-on-name-match, like cue/youtube_query)
+    if "equipment" in ex and ex["equipment"] is not None and not isinstance(ex["equipment"], str):
+        errors.append(f"{where}: equipment must be a string")
     return errors
 
 
@@ -307,31 +311,34 @@ def _default_unit(ex):
 
 def _upsert_exercise(db, ex, now):
     etype = ex["exercise_type"]
+    equipment = ex.get("equipment")
     provided_unit = ex.get("display_unit") if ex.get("display_unit") in DISPLAY_UNITS else None
     known = db.execute(
         "SELECT id FROM exercise WHERE name = ? COLLATE NOCASE", (ex["name"],)
     ).fetchone()
     if known:
-        # update tags + type; only override display_unit when the import states one,
-        # otherwise preserve the user's kg/lbs (or km/mi) toggle
+        # update tags + type + equipment; only override display_unit when the import
+        # states one, otherwise preserve the user's kg/lbs (or km/mi) toggle
         if provided_unit:
             db.execute(
                 "UPDATE exercise SET cue = ?, youtube_query = ?, movement_pattern = ?, "
-                "muscle_group = ?, exercise_type = ?, display_unit = ?, increment_kg = ? WHERE id = ?",
+                "muscle_group = ?, exercise_type = ?, equipment = ?, display_unit = ?, "
+                "increment_kg = ? WHERE id = ?",
                 (ex["cue"], ex["youtube_query"], ex["movement_pattern"], ex["muscle_group"],
-                 etype, provided_unit, float(ex["increment_kg"]), known["id"]),
+                 etype, equipment, provided_unit, float(ex["increment_kg"]), known["id"]),
             )
         else:
             db.execute(
                 "UPDATE exercise SET cue = ?, youtube_query = ?, movement_pattern = ?, "
-                "muscle_group = ?, exercise_type = ?, increment_kg = ? WHERE id = ?",
+                "muscle_group = ?, exercise_type = ?, equipment = ?, increment_kg = ? WHERE id = ?",
                 (ex["cue"], ex["youtube_query"], ex["movement_pattern"], ex["muscle_group"],
-                 etype, float(ex["increment_kg"]), known["id"]),
+                 etype, equipment, float(ex["increment_kg"]), known["id"]),
             )
         return known["id"]
     return db.execute(
         "INSERT INTO exercise (name, cue, youtube_query, movement_pattern, muscle_group, "
-        "exercise_type, display_unit, increment_kg, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "exercise_type, equipment, display_unit, increment_kg, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ex["name"], ex["cue"], ex["youtube_query"], ex["movement_pattern"],
-         ex["muscle_group"], etype, _default_unit(ex), float(ex["increment_kg"]), now),
+         ex["muscle_group"], etype, equipment, _default_unit(ex), float(ex["increment_kg"]), now),
     ).lastrowid

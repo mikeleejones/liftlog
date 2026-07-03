@@ -25,14 +25,25 @@
   <div class="sheet" id="sub-sheet" hidden>
     <div class="sheet-handle"></div>
     <div class="section-label" id="sub-title">swap exercise</div>
-    <div id="sub-list"></div>
-    <div class="sub-new">
-      <input class="secret-input mono sub-new-input" id="sub-new-name" type="text"
-             placeholder="or type a new exercise" autocomplete="off">
-      <button class="btn-quiet mono" id="sub-new-btn" type="button">add</button>
+
+    <div id="sub-main">
+      <div class="section-label sub-section">previously used</div>
+      <div id="sub-prev"></div>
+
+      <div class="section-label sp-top">ai suggestions</div>
+      <div id="sub-ai"></div>
+      <button class="btn-quiet mono sub-btn" id="sub-ai-btn" type="button">get ai suggestions</button>
+
+      <button class="btn-quiet mono sub-btn" id="sub-skip-btn" type="button">skip this exercise</button>
+      <button class="btn-quiet mono cancel-link sub-btn" id="sub-cancel-btn" type="button">cancel</button>
     </div>
-    <button class="btn-quiet mono" id="sub-skip-btn" type="button">skip this exercise</button>
-    <button class="btn-quiet mono cancel-link" id="sub-cancel-btn" type="button">cancel</button>
+
+    <div id="sub-confirm" hidden>
+      <div class="mono muted card-meta" id="sub-confirm-name"></div>
+      <button class="btn-quiet mono sub-btn" id="sub-confirm-once" type="button">use today only</button>
+      <button class="btn-quiet mono sub-btn" id="sub-confirm-perm" type="button">replace in routine</button>
+      <button class="btn-quiet mono cancel-link sub-btn" id="sub-confirm-back" type="button">back</button>
+    </div>
   </div>
 
   <div class="sheet" id="finish-sheet" hidden>

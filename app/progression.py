@@ -260,27 +260,3 @@ def deload_active(db, now_iso):
         return False
     deferred = state["deload_deferred_until"]
     return not (deferred and deferred > now_iso)
-
-
-def substitution_candidates(db, planned_exercise_id, routine_id, exclude_ids=(), limit=3):
-    """The 3 best alternatives: same movement_pattern first, then same
-    muscle_group, tie-broken by prior history then recency. Excluded:
-    exercises in the routine and any explicitly excluded ids (the current
-    exercise, earlier swap targets, anything already trained this workout)."""
-    planned = db.execute(
-        "SELECT * FROM exercise WHERE id = ?", (planned_exercise_id,)
-    ).fetchone()
-    excluded = {planned_exercise_id, *exclude_ids}
-    placeholders = ",".join("?" * len(excluded))
-    return db.execute(
-        f"SELECT e.*, "
-        f"(SELECT MAX(logged_at) FROM set_log WHERE exercise_id = e.id) AS last_used "
-        f"FROM exercise e "
-        f"WHERE e.id NOT IN ({placeholders}) AND e.is_archived = 0 "
-        f"AND e.id NOT IN (SELECT exercise_id FROM routine_exercise WHERE routine_id = ?) "
-        f"ORDER BY (e.movement_pattern = ?) DESC, (e.muscle_group = ?) DESC, "
-        f"(last_used IS NOT NULL) DESC, last_used DESC, e.name "
-        f"LIMIT ?",
-        (*excluded, routine_id or 0, planned["movement_pattern"],
-         planned["muscle_group"], limit),
-    ).fetchall()

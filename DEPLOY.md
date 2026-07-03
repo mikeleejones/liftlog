@@ -89,9 +89,24 @@ start; any existing `liftlog.db` you copied up is migrated in place.
 
 ## Updating later
 
+Deployment is by **rsync**, not git. From the repo root on your Mac, push the
+working tree up — excluding the live database, the secret, and the local venv so
+they're never overwritten:
+
 ```sh
-cd ~/liftlog && git pull
-.venv/bin/pip install -r requirements.txt   # only if requirements changed
+rsync -av --delete \
+  --exclude='.venv' --exclude='liftlog.db*' --exclude='.env' --exclude='.git' \
+  ./ <user>@<host>:~/liftlog/
+```
+
+`--delete` prunes files on the server that no longer exist locally (so removed
+modules like `app/catalog.py` go away too); the excludes keep `liftlog.db`,
+`.env`, and `.venv` intact. Then on the server:
+
+```sh
+ssh <user>@<host>
+cd ~/liftlog
+.venv/bin/pip install -r requirements.txt   # only when requirements changed (e.g. anthropic added in v0.5 item 4)
 pm2 restart liftlog
 ```
 

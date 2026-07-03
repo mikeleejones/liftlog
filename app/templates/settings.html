@@ -18,6 +18,17 @@
   <div class="mono muted card-meta">{{ completed_weeks }} completed week(s) · {{ weeks_since_deload }} since last deload</div>
 </div>
 
+<div class="section-label sp-top">program objective</div>
+<div class="card">
+  <div class="mono muted card-meta">free text describing the program's goal. used as
+    context for AI substitution suggestions.</div>
+  <form method="post" action="{{ base }}/settings/objective">
+    <textarea class="import-box mono" name="objective" rows="3" spellcheck="false"
+      placeholder="e.g. HYROX prep, back-friendly, full-body balanced, progressive overload">{{ objective }}</textarea>
+    <button class="btn-primary accent-violet" type="submit">SAVE OBJECTIVE</button>
+  </form>
+</div>
+
 <div class="section-label sp-top">data</div>
 <div class="card">
   <div class="mono muted card-meta">{{ counts.workouts }} workouts · {{ counts.sets }} sets · {{ counts.exercises }} exercises</div>

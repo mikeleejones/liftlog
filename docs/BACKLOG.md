@@ -81,28 +81,113 @@ question at the gym.
 
 ## 4. AI-suggested substitutions (spec settled — ready to build)
 
-- Trigger: "Ask for a suggestion" button inside the existing substitution
-  sheet, alongside the 3 rule-based alternatives — opt-in, not a replacement.
-- **Context sent, confirmed:** the program objective (new field, see below),
-  the entire program — all routines and their exercises, not just today's —
-  and recent history on candidate exercises. Larger payload than a minimal
-  call, but still small in absolute terms for a single program; worth
-  knowing this means slightly higher latency than a bare single-exercise
-  prompt, acceptable for an opt-in, non-blocking action.
-- **Schema addition:** `program_state` gets a new `objective` (TEXT) field —
-  free text describing the program's goal (e.g. "HYROX prep, back-friendly,
-  full-body balanced, progressive overload"). Set once via Settings, sent as
-  context on every AI-suggestion call so swaps stay aligned with intent
-  rather than just matching movement pattern.
+This supersedes CLAUDE.md decision log item 5 (rule-based pattern/muscle-group
+ranked alternatives). That approach is replaced entirely by the design below.
+**Update CLAUDE.md decision log item 5 in the same commit** to read: "Swap
+sheet shows Previously used (from substitution table) plus AI-suggested
+alternatives (Claude Haiku, cached per exercise, see BACKLOG item 4) — no
+rule-based pattern/muscle-group list."
+
+**Flow:**
+1. Swap sheet opens. "Previously used" renders instantly from the
+   `substitution` table — actual past swaps for this exact routine_exercise
+   slot. Zero cost, zero delay, can be empty (fine, just means never swapped
+   this one before).
+2. Below it, a button: "Get AI Suggestions" (not auto-fetched — this is the
+   deliberate cost/latency guard from the original design pass).
+3. First press: check `ai_suggestion_cache` for this exercise. If 3+ unshown
+   suggestions already exist there, show them instantly — no API call. This
+   is the specific fix for "pressed swap, got distracted, no change made,
+   pressed swap again later" — the second attempt costs nothing.
+4. If fewer than 3 unshown cached suggestions exist, call Haiku for the
+   shortfall (see prompt contract below), save all results to the cache,
+   show 3.
+5. Once results are showing, the button becomes "Refresh." Same logic:
+   pull the next 3 unshown cached suggestions if they exist; only call
+   Haiku again if genuinely exhausted.
+6. Shown suggestions are marked `shown_at` in the cache so they're never
+   re-served as "new" — and any suggestion ever cached for this exercise
+   (shown or not) is sent to Haiku as an exclusion list on every fresh call,
+   so no true duplicate appears across the exercise's whole lifetime.
+7. **Cache never expires in v1.** It's per-exercise, permanent — a good
+   suggestion from months ago is still sitting there next time this
+   exercise needs a swap. This is a deliberate simplicity choice, not an
+   oversight.
+
+**Prompt contract sent to Haiku:** the exercise being replaced (name, cue,
+movement_pattern, muscle_group, equipment, exercise_type), explicit framing
+that its equipment is specifically unavailable right now, the program
+objective, the full program's routines/exercises for context, and the full
+exclusion list of every name ever cached for this exercise slot.
+
+**Response contract:** strict JSON, array of suggestion objects, each with
+`name`, `reason` (one short sentence), `movement_pattern`, `muscle_group`,
+`equipment`, `exercise_type`, `cue`, `youtube_query`. Server validates every
+field against the real enums before it's ever shown — malformed response
+fails closed with a friendly retry, never a raw error or broken card.
+
+**On picking a suggestion (AI or historic):** creates a full library
+exercise immediately if it doesn't already exist (AI suggestions already
+carry every tag item 5's schema needs). Then asks: one-time or permanent?
+- One-time: a `substitution` row only. Today's workout uses the new
+  exercise; the routine is untouched going forward.
+- Permanent: same `substitution` row, plus update that `routine_exercise`
+  row's `exercise_id` to the new exercise (same sets/reps/rest/is_primary —
+  only the exercise filling the slot changes).
+
+**Schema additions** (docs/schema.md):
+
+```sql
+-- program_state table
+objective TEXT   -- free text describing the program's goal, e.g. "HYROX
+                 -- prep, back-friendly, full-body balanced, progressive
+                 -- overload." Set once via Settings. Sent as context on
+                 -- every Haiku call so suggestions stay aligned with
+                 -- intent, not just equipment/pattern matching.
+
+-- exercise table
+equipment TEXT   -- nullable. AI-created exercises always populate this.
+                 -- Existing exercises pick it up on next JSON re-import
+                 -- (import already updates tags on name-match).
+
+-- new table: per-exercise AI suggestion cache, never expires in v1
+CREATE TABLE ai_suggestion_cache (
+    id                  INTEGER PRIMARY KEY,
+    planned_exercise_id INTEGER NOT NULL REFERENCES exercise(id),
+    suggestion_json     TEXT NOT NULL,   -- full validated suggestion object
+    created_at          TEXT NOT NULL,
+    shown_at            TEXT             -- NULL until displayed once
+);
+
+-- new table: log of ACTUAL Haiku calls only (not cached re-shows),
+-- backs the 100/day guardrail
+CREATE TABLE ai_call_log (
+    id         INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+```
+
+**Settings addition:** a plain text field for the program objective, saved
+to `program_state.objective`. Small, one-time setup — you'll fill this in
+once (e.g. the HYROX-prep, back-friendly, progressive-overload framing from
+the original program design) and it feeds every future Haiku call.
+
+**Import JSON format:** add optional `equipment` per exercise, following the
+same update-on-name-match semantics as cue/youtube_query/tags today.
+
 - Model: Claude Haiku — fast, cheap, sufficient for "pick a good gym
   substitute given this context."
 - API key: server-side only, new `ANTHROPIC_API_KEY` in `.env`, never sent
   to the browser. First server-side secret beyond `LIFTLOG_SECRET` — same
   care applies (gitignored, never logged).
-- UI states: loading spinner while the call is in flight (this won't be
-  instant like the rest of the app), graceful failure if offline or the call
-  errors — rule-based alternatives remain available regardless, this is
-  always additive, never a blocking dependency.
+- UI states: loading spinner only during an actual Haiku call (cache hits
+  are instant, no spinner needed); graceful failure if offline or the call
+  errors — Previously Used remains available regardless, this is always
+  additive, never a blocking dependency.
+- **Guardrail:** cap at 100 actual Haiku calls per rolling 24 hours, backed
+  by `ai_call_log` (cached re-shows don't count, only real API calls do).
+  Button disables with a plain message if hit — extremely unlikely at real
+  usage, cheap insurance against a stuck retry loop.
 
 ---
 
@@ -120,13 +205,14 @@ shows.
 -- exercise table
 exercise_type TEXT NOT NULL DEFAULT 'weight_reps'
     CHECK (exercise_type IN
-      ('weight_reps','reps_only','duration','weight_duration',
-       'distance_duration','none'))
+      ('weight_reps','reps_only','duration','duration_weight',
+       'distance','distance_weight','none'))
 ```
 
 `display_unit`'s CHECK constraint broadens to also allow `'km'`/`'mi'` for
-distance-type exercises (kg/lbs stays for weight-type; duration always
-renders as mm:ss with no unit toggle; `none` has no unit at all).
+distance-type exercises (kg/lbs stays for weight-bearing types; duration
+always renders as mm:ss with no unit toggle; `none` and `reps_only` have no
+unit at all).
 
 ```sql
 -- set_log table: weight_kg and reps both become nullable (currently
@@ -136,8 +222,14 @@ distance_m REAL
 ```
 
 Which columns get populated depends entirely on the exercise's
-`exercise_type` — the app decides what to show/save, the schema just has
-room for all of it.
+`exercise_type`:
+- `weight_reps` -> reps + weight_kg
+- `reps_only` -> reps
+- `duration` -> duration_seconds
+- `duration_weight` -> duration_seconds + weight_kg
+- `distance` -> distance_m
+- `distance_weight` -> distance_m + weight_kg
+- `none` -> nothing (completion record only)
 
 **Input control per type on Active Workout:**
 - `weight_reps` — unchanged: weight stepper + reps stepper (today's design).
@@ -146,11 +238,12 @@ room for all of it.
 - `duration` — a duration stepper (seconds, displayed mm:ss where relevant),
   same "did as suggested" one-tap pattern, pre-filled from last time.
   (Plank, dead hang, stretches you actually want tracked.)
-- `weight_duration` — weight stepper + duration stepper. (Weighted plank,
-  farmer's carry hold.)
-- `distance_duration` — distance stepper + duration stepper. (Future: row
-  erg, running intervals — not needed for the current program, schema-ready
-  for later.)
+- `duration_weight` — duration stepper + weight stepper. (Weighted plank,
+  farmer's carry hold in place.)
+- `distance` — distance stepper (km/mi display toggle, same pattern as
+  kg/lbs). (Future: running intervals, row erg by distance.)
+- `distance_weight` — distance stepper + weight stepper. (Loaded carry for
+  distance — relevant for HYROX-style farmer's carry work.)
 - `none` — no metric input at all. Just a checkbox/tap to mark it done.
   Creates a `set_log` row with everything NULL except the type marker, for
   session-completion history only. (Plain stretches like the doorway chest
@@ -158,12 +251,12 @@ room for all of it.
 
 **Progression scope for v1** — keep this proportionate:
 - `weight_reps`: existing double-progression engine, unchanged.
-- `reps_only` and `duration`: simple version — suggest +1 rep or +5s when
-  the top of range is hit cleanly, same stall logic (3 flat sessions ->
-  flag it), just without a weight axis.
-- `weight_duration` and `distance_duration`: log and chart, but **no
+- `reps_only`, `duration`, `distance`: simple version — suggest +1 rep, +5s,
+  or a small distance bump when the top of range is hit cleanly, same stall
+  logic (3 flat sessions -> flag it), just without a weight axis.
+- `duration_weight` and `distance_weight`: log and chart, but **no
   auto-suggestion in v1** — you don't have exercises of these types yet
-  (HYROX running work is the likely future case). Don't build the
+  (HYROX loaded-carry work is the likely future case). Don't build the
   suggestion logic ahead of having a real exercise to test it against.
 - `none`: never enters progression or stall logic at all. It's a completion
   record, nothing more.
