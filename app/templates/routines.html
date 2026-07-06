@@ -15,6 +15,26 @@
   <a class="view-tab mono {{ 'is-active' if archived }}" href="{{ base }}/routines?view=archived">archived</a>
 </div>
 
+{% if not archived and quick_start %}
+<div class="section-label sp-top">start a session{% if program and program.weeks_count > 1 %} — week {{ program_week }} of {{ program.weeks_count }}{% endif %}</div>
+{% for r in quick_start %}
+<div class="card routine-card accent-border-{{ r.accent }}">
+  <div class="header-row">
+    <div class="card-title">{{ r.name }}</div>
+    {% if r.progress_ready and not deload %}
+    <span class="chip chip-progress mono">{{ r.progress_ready }} lift{{ '' if r.progress_ready == 1 else 's' }} ready ↑</span>
+    {% endif %}
+  </div>
+  <div class="mono muted card-meta">{{ r.exercise_count }} exercises</div>
+  <form method="post" action="{{ base }}/workout/start">
+    <input type="hidden" name="routine_id" value="{{ r.id }}">
+    <button class="btn-primary accent-{{ r.accent }}" type="submit">START</button>
+  </form>
+</div>
+{% endfor %}
+<div class="section-label sp-top">programs</div>
+{% endif %}
+
 {% for g in groups %}
 <div class="card program-card {{ 'program-active' if g.program.is_active and not archived }}">
   <div class="header-row">
@@ -58,7 +78,7 @@
 </div>
 {% else %}
 <div class="card"><div class="mono muted">
-  {%- if archived %}no archived routines{% else %}no programs — paste an import below{% endif -%}
+  {%- if archived %}no archived routines{% else %}no programs — import one from the profile tab{% endif -%}
 </div></div>
 {% endfor %}
 

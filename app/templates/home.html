@@ -31,27 +31,6 @@
 </a>
 {% endif %}
 
-{% if program %}
-<div class="section-label sp-top">{{ program.name }}{% if program.weeks_count > 1 %} — week {{ program_week }} of {{ program.weeks_count }}{% endif %}</div>
-{% else %}
-<div class="section-label sp-top">routines</div>
-{% endif %}
-{% for r in routines %}
-<div class="card routine-card accent-border-{{ r.accent }}">
-  <div class="header-row">
-    <div class="card-title">{{ r.name }}</div>
-    {% if r.progress_ready and not deload %}
-    <span class="chip chip-progress mono">{{ r.progress_ready }} lift{{ '' if r.progress_ready == 1 else 's' }} ready ↑</span>
-    {% endif %}
-  </div>
-  <div class="mono muted card-meta">{{ r.exercise_count }} exercises</div>
-  <form method="post" action="{{ base }}/workout/start">
-    <input type="hidden" name="routine_id" value="{{ r.id }}">
-    <button class="btn-primary accent-{{ r.accent }}" type="submit">START</button>
-  </form>
-</div>
-{% endfor %}
-
 <div class="section-label sp-top">program overview</div>
 <div class="card">
   <div class="progress-stats mono">

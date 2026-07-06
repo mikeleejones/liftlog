@@ -21,6 +21,21 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 
 
+def _asset_version() -> str:
+    """A cache-busting stamp appended to static asset URLs (?v=...). Derived from
+    the newest mtime across static/, computed once at startup — a redeploy touches
+    the files and restarts the server, so browsers fetch fresh CSS/JS instead of a
+    heuristically-cached stale copy (StaticFiles sends no Cache-Control)."""
+    try:
+        newest = max(p.stat().st_mtime for p in (APP_DIR / "static").glob("*") if p.is_file())
+        return str(int(newest))
+    except (OSError, ValueError):
+        return "1"
+
+
+ASSET_VERSION = _asset_version()
+
+
 def base_path(request: Request) -> str:
     """The proxy prefix this app is mounted under (e.g. '/liftlog' when run
     with uvicorn --root-path /liftlog), or '' when served at the domain root.
@@ -33,10 +48,11 @@ def redirect(request: Request, path: str, status_code: int = 303) -> RedirectRes
     return RedirectResponse(base_path(request) + path, status_code=status_code)
 
 
-# makes {{ base }} available in every template for href/action/src prefixing
+# makes {{ base }} and {{ asset_v }} available in every template for URL prefixing
+# and static-asset cache-busting
 templates = Jinja2Templates(
     directory=APP_DIR / "templates",
-    context_processors=[lambda request: {"base": base_path(request)}],
+    context_processors=[lambda request: {"base": base_path(request), "asset_v": ASSET_VERSION}],
 )
 
 init_db()
@@ -263,6 +279,40 @@ def _program_overview(db, active, program_week):
     }
 
 
+def _quick_start_cards(db, active, program_week):
+    """The current program week's routines as day-accented START cards (with a
+    'N lifts ready ↑' chip). This is the session-start shortcut — it lives on the
+    Workout tab (BACKLOG item 10 puts session-starting there). With no active
+    program, every unarchived routine is offered."""
+    if active:
+        routines = db.execute(
+            "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
+            "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
+            "WHERE r.is_archived = 0 AND r.program_id = ? AND r.week_number = ? "
+            "GROUP BY r.id ORDER BY r.position, r.id",
+            (active["id"], program_week),
+        ).fetchall()
+    else:
+        routines = db.execute(
+            "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
+            "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
+            "WHERE r.is_archived = 0 GROUP BY r.id ORDER BY r.position, r.id"
+        ).fetchall()
+    cards = []
+    for r in routines:
+        ready = 0
+        for re in db.execute(
+            "SELECT re.target_sets, re.rep_min, re.rep_max, e.* FROM routine_exercise re "
+            "JOIN exercise e ON e.id = re.exercise_id WHERE re.routine_id = ?",
+            (r["id"],),
+        ).fetchall():
+            s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
+            if s["kind"] == "progress":
+                ready += 1
+        cards.append(dict(r, accent=accent_for(r["name"]), progress_ready=ready))
+    return cards
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     if not auth.is_authed(request):
@@ -271,20 +321,6 @@ def home(request: Request):
     run_week_completion(db)
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
     active = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
-    if active:
-        routines = db.execute(
-            "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
-            "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
-            "WHERE r.is_archived = 0 AND r.program_id = ? AND r.week_number = ? "
-            "GROUP BY r.id ORDER BY r.position, r.id",
-            (active["id"], state["program_week"]),
-        ).fetchall()
-    else:
-        routines = db.execute(
-            "SELECT r.*, COUNT(re.id) AS exercise_count FROM routine r "
-            "LEFT JOIN routine_exercise re ON re.routine_id = r.id "
-            "WHERE r.is_archived = 0 GROUP BY r.id ORDER BY r.position, r.id"
-        ).fetchall()
     required, _ = sessions_required(db, state["program_week"])
     sessions_this_week = db.execute(
         "SELECT COUNT(*) FROM workout WHERE finished_at IS NOT NULL AND started_at >= ?",
@@ -306,24 +342,10 @@ def home(request: Request):
         and state["deload_deferred_until"] > now
     )
 
-    routine_cards = []
-    for r in routines:
-        ready = 0
-        for re in db.execute(
-            "SELECT re.target_sets, re.rep_min, re.rep_max, e.* FROM routine_exercise re "
-            "JOIN exercise e ON e.id = re.exercise_id WHERE re.routine_id = ?",
-            (r["id"],),
-        ).fetchall():
-            s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
-            if s["kind"] == "progress":
-                ready += 1
-        routine_cards.append(dict(r, accent=accent_for(r["name"]), progress_ready=ready))
-
     overview = _program_overview(db, active, state["program_week"])
     db.close()
     return templates.TemplateResponse(request, "home.html", {
         "active_tab": "home",
-        "routines": routine_cards,
         "sessions_this_week": sessions_this_week,
         "sessions_required": required,
         "program": active,
@@ -411,7 +433,18 @@ def routines_page(request: Request, imported: int = 0, view: str = "active"):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
+    run_week_completion(db)
     context = _routines_context(db, imported=imported, view=view)
+    if not context["archived"]:
+        # session-start shortcut cards live here now (moved off Home)
+        state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
+        active = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
+        context.update({
+            "quick_start": _quick_start_cards(db, active, state["program_week"]),
+            "program": active,
+            "program_week": state["program_week"],
+            "deload": progression.deload_active(db, utcnow()),
+        })
     db.close()
     return templates.TemplateResponse(request, "routines.html", context)
 
