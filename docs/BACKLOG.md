@@ -389,3 +389,75 @@ fed right back into Import with no transformation. Uses the same
 token-or-cookie auth as everything else on Settings (no new auth needed,
 this one's browser-only, not part of the automation surface).
 
+---
+
+## 10. Navigation reorganization — four-tab structure
+
+Nine items in, screens have accumulated features by *when they were built*
+rather than *what they're for* — Settings in particular now mixes program
+config, data import/export, and automation credentials with no real
+grouping. This is a deliberate IA pass, not a cosmetic tweak, and it sets
+the pattern every future backlog item should follow so this doesn't happen
+again.
+
+**Structure (modeled on Hevy):** a persistent bottom tab bar with four
+destinations. Hidden during Active Workout (full-screen takeover, unchanged
+from today); reappears at Finish Summary.
+
+1. **Home** — dashboard. Today's suggested routine as a quick-start card,
+   deload banner/defer control (unchanged from today's Home), recent
+   activity, progression highlights ("2 lifts ready to progress"). This
+   absorbs the old standalone Progress screen entirely — no separate
+   Progress tab. Tapping the quick-start card still starts today's routine
+   directly, same as today; this is a shortcut into the Workout tab's flow,
+   not a separate code path.
+2. **Workout** — the routines list (Active/Archived tabs, per-routine
+   Archive/Delete actions — all unchanged from item 6, just relocated).
+   This is where a session actually starts from, whether that's today's
+   default or picking something else.
+3. **Exercises** *(new destination)* — full library, searchable by name.
+   Tapping an exercise opens Exercise Detail (history, chart, Reset
+   Progress from item 2 — unchanged functionality, now has a proper front
+   door instead of being reachable only through a routine).
+4. **Profile** — settings, Import, both exports (full backup + program-only
+   from item 9), the API token manager (item 7), the program objective
+   field (item 4), shared secret/session info. Everything about data
+   movement and configuration lives here, nothing else does.
+
+**Migration map (what moves from where):**
+
+| Feature | Was | Now |
+|---|---|---|
+| Routines list (Active/Archived) | standalone screen | Workout tab |
+| Import | same screen as Routines | Profile tab |
+| Full backup export | Settings | Profile tab |
+| Program-only export (item 9) | Settings | Profile tab |
+| API token manager (item 7) | Settings | Profile tab |
+| Program objective field (item 4) | Settings | Profile tab |
+| Progress screen (program overview) | standalone screen | folded into Home |
+| Exercise Detail | reachable only via a routine | Exercises tab (new front door), same screen otherwise |
+| Deload banner/defer | Home | Home (unchanged) |
+| Active Workout / Finish Summary | full-screen, no nav | unchanged |
+| AI substitution swap sheet (item 4) | inline in Active Workout | unchanged, stays inline |
+
+**Design-language.md addition:** spec the bottom tab bar component — four
+equal-width tabs, icon + label, active-tab indicator using the existing
+accent tokens (reuse the day-accent system's visual weight, not a fifth new
+color), 1px top border matching existing card border treatment. Hidden
+state (during Active Workout) should be a clean unmount, not just
+visually collapsed, so Active Workout keeps its full-screen focus exactly
+as designed.
+
+**CLAUDE.md update required in the same commit:** the "Screens (7 total)"
+section needs to be rewritten to reflect this structure — it's the kind of
+drift that makes CLAUDE.md stop being trustworthy as the source of truth if
+left unupdated after a change this size.
+
+**Guidance for all future backlog items (add this as a standing note in
+CLAUDE.md, not just this entry):** default new features to the tab matching
+their *kind*, not their build order — a single exercise's data/history goes
+in Exercises; routine composition or session-starting goes in Workout; data
+movement or account-level config goes in Profile; a stat/summary/dashboard
+widget goes in Home. This is the whole point of doing this pass — the next
+nine items shouldn't need a reorganization like this one.
+

@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 {% block title %}exercises — liftlog{% endblock %}
 {% block content %}
-<header class="app-header header-row">
-  <div>
-    <div class="section-label">exercise library</div>
-    <div class="mono muted card-meta">{{ exercises | length }} exercise{{ '' if exercises | length == 1 else 's' }}</div>
-  </div>
-  <nav class="mono nav-links"><a href="{{ base }}/">home</a><a href="{{ base }}/routines">routines</a></nav>
+<header class="app-header">
+  <div class="section-label">exercise library</div>
+  <div class="mono muted card-meta">{{ exercises | length }} exercise{{ '' if exercises | length == 1 else 's' }}{% if q %} matching “{{ q }}”{% endif %}</div>
 </header>
+
+<form method="get" action="{{ base }}/exercises" class="search-row" role="search">
+  <input class="secret-input search-input mono" type="search" name="q" value="{{ q }}"
+         placeholder="search by name" autocomplete="off" spellcheck="false">
+  <button class="btn-quiet mono" type="submit">search</button>
+</form>
 
 {% for ex in exercises %}
 <a class="card" href="{{ base }}/exercise/{{ ex.id }}">
@@ -17,6 +20,8 @@
   {% if ex.cue %}<div class="exercise-cue">{{ ex.cue }}</div>{% endif %}
 </a>
 {% else %}
-<div class="card"><div class="mono muted">no exercises yet</div></div>
+<div class="card"><div class="mono muted">
+  {%- if q %}no exercises match “{{ q }}”{% else %}no exercises yet{% endif -%}
+</div></div>
 {% endfor %}
 {% endblock %}

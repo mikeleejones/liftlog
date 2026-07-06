@@ -47,11 +47,29 @@ or per-set RPE. Do not add these.
   bottom sheets, charts), motion rules, and interface copy voice. Every screen
   derives from these tokens; no ad-hoc colors or font sizes.
 
-## Screens (7 total)
+## Screens — four-tab structure (item 10)
 
-Home -> Active Workout -> Finish Summary; plus Exercise Detail (history +
-chart), Routines + Import (paste JSON with human-readable preview), Progress
-(program overview), Settings (export, deload status, secret).
+A persistent bottom tab bar with four destinations:
+
+- **Home** — dashboard: today's quick-start routine card (starts the session
+  directly), deload banner/defer, and the program overview folded in from the
+  old standalone Progress screen (which lifts are progressing/stalled,
+  completed weeks, weeks-since-deload, honesty audit). Progress is no longer a
+  separate screen; `/progress` redirects to Home.
+- **Workout** — the routines list (Active/Archived tabs, per-routine
+  Archive/Delete); where a session starts from. Backing URL `/routines`.
+- **Exercises** — the full exercise library, searchable by name. The front
+  door to Exercise Detail, which is no longer reachable only through a routine.
+- **Profile** — Import (paste JSON + preview), both exports (full backup +
+  program-only), the API token manager, the program objective field, and
+  shared-secret/session info. All data movement and configuration lives here.
+  Backing URL `/settings`.
+
+Full-screen (no tab bar): Active Workout and Finish Summary. The tab bar is
+cleanly UNMOUNTED (not just CSS-hidden) during Active Workout so it keeps its
+full-screen focus, and reappears at Finish Summary. Login has no tab bar.
+Exercise Detail (history + chart, Reset Progress) is reached from the
+Exercises tab and keeps the bar (Exercises active).
 
 ## Key decisions log (do not relitigate)
 
@@ -126,3 +144,8 @@ signed off. Do not build ahead "while you're in there."
 - Never commit secrets. .gitignore the SQLite database file and any .env.
 - Routine design/programming questions are NOT Claude Code's job — those go
   back to the claude.ai conversation; this repo only consumes the JSON.
+- Place new features in the tab matching their KIND, not their build order
+  (item 10's whole point): a single exercise's data/history goes in Exercises;
+  routine composition or session-starting goes in Workout; data movement or
+  account-level config goes in Profile; a stat/summary/dashboard widget goes in
+  Home. This keeps screens grouped by purpose so another reorg isn't needed.

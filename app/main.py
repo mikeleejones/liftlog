@@ -156,6 +156,12 @@ def parse_ts(ts: str) -> datetime:
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
+def _like_escape(term: str) -> str:
+    """Escape LIKE wildcards so a search term is matched literally (paired with
+    ESCAPE '\\' in the query)."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def login_redirect(request: Request) -> RedirectResponse:
     return redirect(request, "/login")
 
@@ -203,6 +209,59 @@ def login(request: Request, secret: str = Form("")):
 
 
 # ---- home ----
+
+def _program_overview(db, active, program_week):
+    """Program-level lift overview folded into Home from the old standalone
+    Progress screen (BACKLOG item 10): each current-week lift's last vs suggested
+    value and progress/stall kind, plus the honesty audit. Read-only."""
+    lifts = []
+    if active:
+        rows = db.execute(
+            "SELECT re.target_sets, re.rep_min, re.rep_max, e.* FROM routine_exercise re "
+            "JOIN exercise e ON e.id = re.exercise_id "
+            "JOIN routine r ON r.id = re.routine_id "
+            "WHERE r.program_id = ? AND r.week_number = ? AND r.is_archived = 0 "
+            "ORDER BY r.position, re.position",
+            (active["id"], program_week),
+        ).fetchall()
+        seen = set()
+        for re in rows:
+            if re["id"] in seen:
+                continue
+            seen.add(re["id"])
+            etype = re["exercise_type"]
+            unit = re["display_unit"]
+            primary = PRIMARY_METRIC[etype]
+            s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
+            last = db.execute(
+                "SELECT s.weight_kg, s.reps, s.duration_seconds, s.distance_m "
+                "FROM set_log s JOIN workout w ON w.id = s.workout_id "
+                "WHERE s.exercise_id = ? AND s.set_type = 'normal' AND w.is_deload = 0 "
+                "ORDER BY w.started_at DESC, s.id DESC LIMIT 1",
+                (re["id"],),
+            ).fetchone()
+            last_val = last[primary] if (last and primary) else None
+            lifts.append({
+                "id": re["id"],
+                "name": re["name"],
+                "unit": metric_label(etype, unit),
+                "last": fmt_primary(etype, last_val, unit) if last else "—",
+                "suggest": fmt_primary(etype, s[primary], unit) if primary else "—",
+                "kind": s["kind"],
+            })
+    # honesty audit (decision 10): share of working sets logged as-suggested
+    audit = db.execute(
+        "SELECT COUNT(*) AS total, COALESCE(SUM(was_suggested), 0) AS suggested "
+        "FROM set_log WHERE set_type = 'normal'"
+    ).fetchone()
+    suggested_pct = round(100 * audit["suggested"] / audit["total"]) if audit["total"] else None
+    return {
+        "lifts": lifts,
+        "ready": sum(1 for l in lifts if l["kind"] == "progress"),
+        "suggested_pct": suggested_pct,
+        "audit_total": audit["total"],
+    }
+
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -260,17 +319,22 @@ def home(request: Request):
                 ready += 1
         routine_cards.append(dict(r, accent=accent_for(r["name"]), progress_ready=ready))
 
+    overview = _program_overview(db, active, state["program_week"])
     db.close()
     return templates.TemplateResponse(request, "home.html", {
+        "active_tab": "home",
         "routines": routine_cards,
         "sessions_this_week": sessions_this_week,
         "sessions_required": required,
         "program": active,
         "program_week": state["program_week"],
+        "completed_weeks": state["completed_weeks"],
+        "weeks_since_deload": state["weeks_since_deload"],
         "deload": deload,
         "deload_deferred": deload_deferred,
         "in_progress": in_progress,
         "in_progress_accent": accent_for(in_progress["routine_name"] or "") if in_progress else None,
+        **overview,
     })
 
 
@@ -329,17 +393,16 @@ def _program_groups(db, archived=False):
     return groups, [dict(r, accent=accent_for(r["name"])) for r in standalone]
 
 
-def _routines_context(db, imported=0, errors=None, raw="", view="active"):
+def _routines_context(db, imported=0, view="active"):
     archived = view == "archived"
     groups, standalone = _program_groups(db, archived=archived)
     return {
+        "active_tab": "workout",
         "view": "archived" if archived else "active",
         "archived": archived,
         "groups": groups,
         "standalone": standalone,
         "imported": imported,
-        "errors": errors or [],
-        "raw": raw,
     }
 
 
@@ -427,10 +490,11 @@ def import_preview(request: Request, raw: str = Form("")):
         return login_redirect(request)
     payload, errors = _parse_import(raw)
     if errors:
+        # import lives on the Profile tab now — re-render it with the errors + raw
         db = get_db()
-        context = _routines_context(db, errors=errors, raw=raw)
+        context = _settings_context(db, import_errors=errors, import_raw=raw)
         db.close()
-        return templates.TemplateResponse(request, "routines.html", context, status_code=422)
+        return templates.TemplateResponse(request, "settings.html", context, status_code=422)
     db = get_db()
     plan = importer.plan(db, importer.normalize(payload))
     db.close()
@@ -446,7 +510,7 @@ def import_apply(request: Request, raw: str = Form("")):
         return login_redirect(request)
     payload, errors = _parse_import(raw)
     if errors:
-        return redirect(request, "/routines")
+        return redirect(request, "/settings")
     db = get_db()
     importer.apply_import(db, importer.normalize(payload), utcnow())
     db.commit()
@@ -455,15 +519,27 @@ def import_apply(request: Request, raw: str = Form("")):
 
 
 @app.get("/exercises", response_class=HTMLResponse)
-def exercises_page(request: Request):
+def exercises_page(request: Request, q: str = ""):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
-    exercises = db.execute(
-        "SELECT * FROM exercise WHERE is_archived = 0 ORDER BY name COLLATE NOCASE"
-    ).fetchall()
+    query = q.strip()
+    if query:
+        exercises = db.execute(
+            "SELECT * FROM exercise WHERE is_archived = 0 AND name LIKE ? ESCAPE '\\' "
+            "ORDER BY name COLLATE NOCASE",
+            (f"%{_like_escape(query)}%",),
+        ).fetchall()
+    else:
+        exercises = db.execute(
+            "SELECT * FROM exercise WHERE is_archived = 0 ORDER BY name COLLATE NOCASE"
+        ).fetchall()
     db.close()
-    return templates.TemplateResponse(request, "exercises.html", {"exercises": exercises})
+    return templates.TemplateResponse(request, "exercises.html", {
+        "active_tab": "exercises",
+        "exercises": exercises,
+        "q": query,
+    })
 
 
 # ---- progress + exercise detail + settings ----
@@ -533,6 +609,7 @@ def exercise_detail(request: Request, exercise_id: int):
         for h in history if h["top_value"] is not None
     ])
     return templates.TemplateResponse(request, "exercise_detail.html", {
+        "active_tab": "exercises",
         "exercise": exercise,
         "unit": metric_label(exercise["exercise_type"], unit),
         "history": list(reversed(history)),
@@ -558,76 +635,14 @@ def reset_exercise_progress(request: Request, exercise_id: int):
     return redirect(request, f"/exercise/{exercise_id}")
 
 
-@app.get("/progress", response_class=HTMLResponse)
+@app.get("/progress")
 def progress_page(request: Request):
-    if not auth.is_authed(request):
-        return login_redirect(request)
-    db = get_db()
-    run_week_completion(db)
-    state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
-    active = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
-    now = utcnow()
-    deload = progression.deload_active(db, now)
-
-    lifts = []
-    if active:
-        rows = db.execute(
-            "SELECT re.target_sets, re.rep_min, re.rep_max, e.* FROM routine_exercise re "
-            "JOIN exercise e ON e.id = re.exercise_id "
-            "JOIN routine r ON r.id = re.routine_id "
-            "WHERE r.program_id = ? AND r.week_number = ? AND r.is_archived = 0 "
-            "ORDER BY r.position, re.position",
-            (active["id"], state["program_week"]),
-        ).fetchall()
-        seen = set()
-        for re in rows:
-            if re["id"] in seen:
-                continue
-            seen.add(re["id"])
-            etype = re["exercise_type"]
-            unit = re["display_unit"]
-            primary = PRIMARY_METRIC[etype]
-            s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
-            last = db.execute(
-                "SELECT s.weight_kg, s.reps, s.duration_seconds, s.distance_m "
-                "FROM set_log s JOIN workout w ON w.id = s.workout_id "
-                "WHERE s.exercise_id = ? AND s.set_type = 'normal' AND w.is_deload = 0 "
-                "ORDER BY w.started_at DESC, s.id DESC LIMIT 1",
-                (re["id"],),
-            ).fetchone()
-            last_val = last[primary] if (last and primary) else None
-            lifts.append({
-                "id": re["id"],
-                "name": re["name"],
-                "unit": metric_label(etype, unit),
-                "last": fmt_primary(etype, last_val, unit) if last else "—",
-                "suggest": fmt_primary(etype, s[primary], unit) if primary else "—",
-                "kind": s["kind"],
-            })
-
-    # honesty audit (decision 10): share of working sets logged as-suggested
-    audit = db.execute(
-        "SELECT COUNT(*) AS total, COALESCE(SUM(was_suggested), 0) AS suggested "
-        "FROM set_log WHERE set_type = 'normal'"
-    ).fetchone()
-    suggested_pct = round(100 * audit["suggested"] / audit["total"]) if audit["total"] else None
-
-    ready = sum(1 for l in lifts if l["kind"] == "progress")
-    db.close()
-    return templates.TemplateResponse(request, "progress.html", {
-        "program": active,
-        "program_week": state["program_week"],
-        "completed_weeks": state["completed_weeks"],
-        "weeks_since_deload": state["weeks_since_deload"],
-        "deload": deload,
-        "lifts": lifts,
-        "ready": ready,
-        "suggested_pct": suggested_pct,
-        "audit_total": audit["total"],
-    })
+    # Progress is no longer a separate screen (BACKLOG item 10) — its content is
+    # folded into Home. Redirect keeps old bookmarks / PWA shortcuts working.
+    return redirect(request, "/")
 
 
-def _settings_context(db, new_token=None):
+def _settings_context(db, new_token=None, import_errors=None, import_raw=""):
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
     now = utcnow()
     deload = progression.deload_active(db, now)
@@ -642,6 +657,7 @@ def _settings_context(db, new_token=None):
         "SELECT id, name, created_at, last_used_at FROM api_token ORDER BY created_at DESC, id DESC"
     ).fetchall()
     return {
+        "active_tab": "profile",
         "deload": deload,
         "weeks_since_deload": state["weeks_since_deload"],
         "completed_weeks": state["completed_weeks"],
@@ -650,6 +666,8 @@ def _settings_context(db, new_token=None):
         "objective": state["objective"] or "",
         "tokens": tokens,
         "new_token": new_token,
+        "import_errors": import_errors or [],
+        "import_raw": import_raw,
     }
 
 
@@ -1283,6 +1301,9 @@ def summary_page(request: Request, workout_id: int):
 
     routine_name = routine["name"] if routine else "ad-hoc session"
     return templates.TemplateResponse(request, "summary.html", {
+        # tab bar remounts at Finish Summary (item 10); no tab is highlighted
+        # since the summary isn't itself one of the four destinations.
+        "active_tab": "summary",
         "routine_name": routine_name,
         "accent": accent_for(routine_name),
         "finished": bool(workout["finished_at"]),

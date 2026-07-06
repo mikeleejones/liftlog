@@ -1,12 +1,9 @@
 {% extends "base.html" %}
 {% block title %}liftlog{% endblock %}
 {% block content %}
-<header class="app-header header-row">
-  <div>
-    <div class="section-label">liftlog</div>
-    <div class="mono muted week-count">{{ sessions_this_week }} of {{ sessions_required }} sessions this week</div>
-  </div>
-  <nav class="mono nav-links"><a href="{{ base }}/progress">progress</a><a href="{{ base }}/routines">routines</a></nav>
+<header class="app-header">
+  <div class="section-label">liftlog</div>
+  <div class="mono muted week-count">{{ sessions_this_week }} of {{ sessions_required }} sessions this week</div>
 </header>
 
 {% if deload %}
@@ -54,4 +51,39 @@
   </form>
 </div>
 {% endfor %}
+
+<div class="section-label sp-top">program overview</div>
+<div class="card">
+  <div class="progress-stats mono">
+    <div><span class="muted">completed weeks</span> {{ completed_weeks }}</div>
+    <div><span class="muted">since deload</span> {{ weeks_since_deload }}</div>
+    {% if deload %}<div class="accent-text-gold">deload week</div>{% endif %}
+    {% if ready and not deload %}<div class="accent-text-green">{{ ready }} ready ↑</div>{% endif %}
+  </div>
+</div>
+
+{% if lifts %}
+<div class="section-label sp-top">lifts this week</div>
+{% for l in lifts %}
+<a class="card lift-row" href="{{ base }}/exercise/{{ l.id }}">
+  <div class="header-row">
+    <div class="card-title lift-name">{{ l.name }}</div>
+    {% if l.kind == 'progress' %}<span class="chip chip-progress mono">↑ {{ l.suggest }}</span>
+    {% elif l.kind == 'stall' %}<span class="chip chip-stall mono">stalled: try {{ l.suggest }}</span>
+    {% endif %}
+  </div>
+  <div class="mono muted card-meta">last {{ l.last }} {{ l.unit }} · next {{ l.suggest }} {{ l.unit }}</div>
+</a>
+{% endfor %}
+{% endif %}
+
+{% if suggested_pct is not none %}
+<div class="section-label sp-top">honesty audit</div>
+<div class="card">
+  <div class="mono muted card-meta">{{ suggested_pct }}% of {{ audit_total }} working sets logged as-suggested</div>
+  {% if suggested_pct >= 95 %}
+  <div class="mono muted card-meta audit-note">high — check that logging reflects what you actually lifted</div>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}

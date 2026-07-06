@@ -80,6 +80,19 @@ countdown, thin progress line draining in the day accent, [skip] as a small
 bordered pill button (secondary weight, but unmistakably a button — not a
 bare text link). Timer end: green flash + vibration (where supported).
 
+**Bottom tab bar** (item 10): the app's primary navigation — four
+equal-width tabs (Home, Workout, Exercises, Profile), each an icon above a
+mono lowercase label. Fixed to the bottom of the viewport on --surface with
+a 1px --border top hairline (the same card-border treatment), inner content
+capped at the 560px column and centered so it doesn't stretch on desktop.
+Inactive tabs are --muted; the active tab uses --violet (the existing
+home/analysis accent — reuse its visual weight, do NOT introduce a fifth
+color). Respects the safe-area inset at the bottom. It is present on
+Home/Workout/Exercises/Profile (and Exercise Detail, Finish Summary), and
+cleanly UNMOUNTED — not CSS-hidden — during Active Workout and login so those
+screens keep full-screen focus. The shell already reserves bottom padding to
+clear it.
+
 **Sheets** (jump list, substitution picker): bottom sheets on --surface,
 drag handle, same card idiom inside.
 

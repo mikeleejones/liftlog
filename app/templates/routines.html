@@ -1,12 +1,9 @@
 {% extends "base.html" %}
 {% block title %}routines — liftlog{% endblock %}
 {% block content %}
-<header class="app-header header-row">
-  <div>
-    <div class="section-label">programs</div>
-    <div class="mono muted card-meta">{{ groups | length }} program{{ '' if groups | length == 1 else 's' }}</div>
-  </div>
-  <nav class="nav-links"><a href="{{ base }}/">home</a><a href="{{ base }}/exercises">exercises</a></nav>
+<header class="app-header">
+  <div class="section-label">workout</div>
+  <div class="mono muted card-meta">{{ groups | length }} program{{ '' if groups | length == 1 else 's' }} · start a session</div>
 </header>
 
 {% if imported %}
@@ -87,22 +84,6 @@
     </span>
   </div>
   {% endfor %}
-</div>
-{% endif %}
-
-{% if not archived %}
-<div class="section-label sp-top">import</div>
-<div class="card">
-  <form method="post" action="{{ base }}/routines/import/preview">
-    <textarea class="import-box mono" name="raw" rows="8" spellcheck="false"
-      placeholder='paste program JSON from claude.ai ({"version": 2, "program": {...}})'>{{ raw }}</textarea>
-    {% if errors %}
-    <div class="import-errors mono">
-      {% for e in errors %}<div>{{ e }}</div>{% endfor %}
-    </div>
-    {% endif %}
-    <button class="btn-primary accent-violet" type="submit">PREVIEW IMPORT</button>
-  </form>
 </div>
 {% endif %}
 

@@ -20,6 +20,9 @@
 <main class="shell {% block shell_class %}{% endblock %}">
 {% block content %}{% endblock %}
 </main>
+{# tab bar renders only when a screen sets active_tab; Active Workout and login
+   omit it entirely (a clean unmount, not CSS-hidden) so they keep full focus. #}
+{% if active_tab %}{% include "_tabbar.html" %}{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

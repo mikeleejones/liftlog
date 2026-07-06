@@ -1,0 +1,32 @@
+<nav class="tabbar" aria-label="primary">
+  <div class="tabbar-inner">
+    <a class="tab mono {{ 'is-active' if active_tab == 'home' }}" href="{{ base }}/"
+       {{ 'aria-current=page' if active_tab == 'home' }}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 11l9-8 9 8"/><path d="M5 9.5V20h14V9.5"/></svg>
+      <span>home</span>
+    </a>
+    <a class="tab mono {{ 'is-active' if active_tab == 'workout' }}" href="{{ base }}/routines"
+       {{ 'aria-current=page' if active_tab == 'workout' }}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 9v6M7 7.5v9M17 7.5v9M20 9v6M7 12h10"/></svg>
+      <span>workout</span>
+    </a>
+    <a class="tab mono {{ 'is-active' if active_tab == 'exercises' }}" href="{{ base }}/exercises"
+       {{ 'aria-current=page' if active_tab == 'exercises' }}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>
+      <span>exercises</span>
+    </a>
+    <a class="tab mono {{ 'is-active' if active_tab == 'profile' }}" href="{{ base }}/settings"
+       {{ 'aria-current=page' if active_tab == 'profile' }}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="8" r="3.2"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/></svg>
+      <span>profile</span>
+    </a>
+  </div>
+</nav>
