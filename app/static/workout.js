@@ -768,4 +768,44 @@ document.getElementById("finish-discard-btn").addEventListener("click", discardW
 document.getElementById("finish-cancel-btn").addEventListener("click", closeAllSheets);
 backdrop.addEventListener("click", closeAllSheets);
 
+// ---- screen wake lock (Active Workout only) ----
+// Keep the screen awake through a workout so the phone doesn't sleep between
+// sets. Purely best-effort: it no-ops silently where the API is missing or the
+// request is rejected (e.g. iOS low-power mode) — never an error, never a
+// blocker. The browser auto-releases the lock whenever the page is hidden
+// (app switch, manual lock), so we re-acquire on visibilitychange to make that
+// invisible. Installed iOS web apps need 18.4+ for this to hold correctly.
+let wakeLock = null;
+
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    // if it's released out from under us, drop the stale handle
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
+  } catch (err) {
+    wakeLock = null; // unsupported / rejected — stay silent
+  }
+}
+
+async function releaseWakeLock() {
+  if (!wakeLock) return;
+  try {
+    await wakeLock.release();
+  } catch (err) {
+    /* already gone */
+  }
+  wakeLock = null;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") requestWakeLock();
+});
+// explicit release on leaving Active Workout (finish, discard, or navigate away);
+// pagehide is the iOS-reliable teardown hook and also fires before our own
+// window.location navigations
+window.addEventListener("pagehide", releaseWakeLock);
+
+requestWakeLock();
+
 render();
