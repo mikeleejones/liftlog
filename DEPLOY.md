@@ -43,17 +43,41 @@ does not:
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port <PORT>
 ```
 
-Keep it alive across reboots. ultra.cc ships **pm2**:
+Keep it alive across reboots. ultra.cc ships **pm2**. The process is defined
+by the version-controlled `ecosystem.config.js` in the repo root rather than an
+ad-hoc shell string, so restart limits are explicit. It reads the port (and the
+optional subpath) from the gitignored `.env`, so add those there first:
 
 ```sh
-pm2 start ".venv/bin/uvicorn app.main:app --host 127.0.0.1 --port <PORT>" \
-  --name liftlog --cwd /home/<user>/liftlog
-pm2 save
-pm2 startup   # follow the printed instruction once
+# ~/liftlog/.env  (alongside LIFTLOG_SECRET)
+LIFTLOG_PORT=<PORT>
+# LIFTLOG_ROOT_PATH=/liftlog     # ONLY for the subpath layout (see section 4)
 ```
 
-(`.env` is read by the app itself, so pm2 needs no extra env config. If you
-prefer systemd --user, an equivalent unit works the same way.)
+Then start it from the config file:
+
+```sh
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup   # follow the printed instruction once (survives a reboot)
+```
+
+The config enables auto-restart on crash (pm2's default) but bounds it:
+`min_uptime: 10s` + `max_restarts: 10` mean a process that keeps dying within
+10s of start is retried 10 times, then left stopped instead of hammering the
+slot in a crash-loop. `.env` is read by both the config (for the port) and the
+app itself, so pm2 needs no extra env config. If you prefer systemd --user, an
+equivalent unit works the same way.
+
+**Cap the logs** so crash output can't fill the slot's disk quota. Install the
+pm2 log-rotate module once (idempotent — safe to re-run):
+
+```sh
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+pm2 set pm2-logrotate:compress true
+```
 
 ## 4. Expose it through nginx
 
@@ -61,8 +85,8 @@ In the panel, add a reverse-proxy / custom-app entry that forwards a public
 URL to `http://127.0.0.1:<PORT>`. Both layouts are supported:
 
 - **Subdomain** (`https://liftlog.<user>.usbx.me`): nothing extra to do.
-- **Subpath** (`https://<user>.usbx.me/liftlog/`): run uvicorn with
-  `--root-path /liftlog`, and configure nginx to strip the prefix before
+- **Subpath** (`https://<user>.usbx.me/liftlog/`): set `LIFTLOG_ROOT_PATH=/liftlog`
+  in `.env` (the config passes it to uvicorn as `--root-path`), and configure nginx to strip the prefix before
   forwarding (a `proxy_pass http://127.0.0.1:<PORT>/;` with the trailing
   slash under `location /liftlog/ { ... }`). The app reads the incoming root
   path and prefixes every link, redirect, form action, static asset, and JS
@@ -109,6 +133,19 @@ cd ~/liftlog
 .venv/bin/pip install -r requirements.txt   # only when requirements changed (e.g. anthropic added in v0.5 item 4)
 pm2 restart liftlog
 ```
+
+**One-time migration to the config file** (only if liftlog is still running from
+the old inline `pm2 start ".venv/bin/uvicorn ..."` string). Add `LIFTLOG_PORT`
+to `.env` (see section 3), then re-create the process from the config once:
+
+```sh
+pm2 delete liftlog
+pm2 start ecosystem.config.js
+pm2 save
+```
+
+After that, plain `pm2 restart liftlog` picks up the version-controlled
+definition on every deploy.
 
 Schema changes migrate on start (see `app/db.py`). Back up first with the
 **EXPORT JSON** button on the Settings screen, or just copy `liftlog.db`.
