@@ -778,7 +778,8 @@ backdrop.addEventListener("click", closeAllSheets);
 let wakeLock = null;
 
 async function requestWakeLock() {
-  if (!("wakeLock" in navigator)) return;
+  // no-op if already held, or unsupported
+  if (wakeLock || !("wakeLock" in navigator)) return;
   try {
     wakeLock = await navigator.wakeLock.request("screen");
     // if it's released out from under us, drop the stale handle
@@ -805,6 +806,14 @@ document.addEventListener("visibilitychange", () => {
 // pagehide is the iOS-reliable teardown hook and also fires before our own
 // window.location navigations
 window.addEventListener("pagehide", releaseWakeLock);
+
+// iOS/WebKit rejects a wake-lock request made at page load (no user activation),
+// which is why an immediate request alone still lets the screen sleep. So also
+// (re)acquire on the first user interaction — during a workout you're tapping
+// constantly (steppers, LOG SET). requestWakeLock() no-ops once the lock holds.
+["pointerdown", "click", "touchend"].forEach((evt) =>
+  document.addEventListener(evt, requestWakeLock)
+);
 
 requestWakeLock();
 
