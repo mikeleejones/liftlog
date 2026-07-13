@@ -149,3 +149,9 @@ signed off. Do not build ahead "while you're in there."
   routine composition or session-starting goes in Workout; data movement or
   account-level config goes in Profile; a stat/summary/dashboard widget goes in
   Home. This keeps screens grouped by purpose so another reorg isn't needed.
+
+## Server access
+Claude Code has direct SSH access to the ultra.cc deployment via the
+`liftlog-server` alias. Always ask for explicit confirmation before running
+anything destructive on the server (pm2 delete, database migrations, rm on
+liftlog.db) — read-only checks (pm2 status, logs, describe) don't need to ask.
