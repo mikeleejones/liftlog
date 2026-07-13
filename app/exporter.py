@@ -102,3 +102,45 @@ def export_all(db, exported_at):
             db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
         ),
     }
+
+
+def tcx_calories(bodyweight_kg, duration_seconds) -> int:
+    """Calorie estimate for the TCX/Health export (BACKLOG item 11):
+    6 METs (generic strength-training average) * bodyweight_kg * hours. Returns
+    0 when bodyweight_kg is NULL/unset — never guess a placeholder value."""
+    if not bodyweight_kg:
+        return 0
+    return round(6 * bodyweight_kg * (duration_seconds / 3600))
+
+
+def workout_tcx(started_at, duration_seconds, bodyweight_kg) -> str:
+    """Render a finished workout as a Garmin TCX v2 document (BACKLOG item 11),
+    for manual Apple Health import via the free 'TCX to HealthKit' app.
+
+    Sport='Other' (TCX has no strength-training sport value — 'Other' is the
+    confirmed-correct choice); no GPS track and DistanceMeters a literal 0,
+    which correctly represents a non-GPS session and imports cleanly into Health.
+    `started_at` is the stored ISO 8601 UTC string, used as both the activity Id
+    and the lap StartTime."""
+    calories = tcx_calories(bodyweight_kg, duration_seconds)
+    total_time_seconds = int(round(duration_seconds))
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
+        '<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"\n'
+        '  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n'
+        '  xsi:schemaLocation="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2 http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd">\n'
+        "  <Activities>\n"
+        '    <Activity Sport="Other">\n'
+        f"      <Id>{started_at}</Id>\n"
+        f'      <Lap StartTime="{started_at}">\n'
+        f"        <TotalTimeSeconds>{total_time_seconds}</TotalTimeSeconds>\n"
+        "        <DistanceMeters>0</DistanceMeters>\n"
+        f"        <Calories>{calories}</Calories>\n"
+        "        <Intensity>Active</Intensity>\n"
+        "        <TriggerMethod>Manual</TriggerMethod>\n"
+        "      </Lap>\n"
+        '      <Creator xsi:type="Device_t"><Name>LiftLog</Name></Creator>\n'
+        "    </Activity>\n"
+        "  </Activities>\n"
+        "</TrainingCenterDatabase>\n"
+    )

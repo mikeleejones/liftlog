@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -697,6 +697,8 @@ def _settings_context(db, new_token=None, import_errors=None, import_raw=""):
         "deload_deferred": bool(state["deload_deferred_until"] and state["deload_deferred_until"] > now),
         "counts": counts,
         "objective": state["objective"] or "",
+        # cleaned for the input's value: '80' not '80.0', '' when unset
+        "bodyweight_kg": ("%g" % state["bodyweight_kg"]) if state["bodyweight_kg"] else "",
         "tokens": tokens,
         "new_token": new_token,
         "import_errors": import_errors or [],
@@ -757,6 +759,29 @@ def save_objective(request: Request, objective: str = Form("")):
     return redirect(request, "/settings")
 
 
+@app.post("/settings/bodyweight")
+def save_bodyweight(request: Request, bodyweight_kg: str = Form("")):
+    """Save bodyweight (kg) to program_state for the TCX/Health calorie estimate
+    (BACKLOG item 11). Blank or non-positive/invalid input clears it to NULL, so
+    the export falls back to Calories 0 rather than a fabricated number."""
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    value = bodyweight_kg.strip()
+    parsed = None
+    if value:
+        try:
+            parsed = float(value)
+        except ValueError:
+            parsed = None
+        if parsed is not None and parsed <= 0:
+            parsed = None
+    db = get_db()
+    db.execute("UPDATE program_state SET bodyweight_kg = ? WHERE id = 1", (parsed,))
+    db.commit()
+    db.close()
+    return redirect(request, "/settings")
+
+
 @app.get("/export")
 def export_json(request: Request):
     if not auth.is_authed(request):
@@ -787,6 +812,35 @@ def export_program_json(request: Request):
     return JSONResponse(
         data,
         headers={"Content-Disposition": f'attachment; filename="liftlog-program-{stamp}.json"'},
+    )
+
+
+@app.get("/workout/{workout_id}/export.tcx")
+def export_workout_tcx(request: Request, workout_id: int):
+    """Download a finished workout as a Garmin TCX file (BACKLOG item 11) for
+    manual Apple Health import via the free 'TCX to HealthKit' app. Standard
+    browser download, behind the normal session — same as the JSON exports."""
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
+    if workout is None or workout["finished_at"] is None:
+        db.close()
+        return redirect(request, "/")
+    duration_seconds = (
+        parse_ts(workout["finished_at"]) - parse_ts(workout["started_at"])
+    ).total_seconds()
+    state = db.execute("SELECT bodyweight_kg FROM program_state WHERE id = 1").fetchone()
+    bodyweight_kg = state["bodyweight_kg"] if state else None
+    db.close()
+    xml = exporter.workout_tcx(workout["started_at"], duration_seconds, bodyweight_kg)
+    stamp = workout["started_at"][:10]
+    return Response(
+        content=xml,
+        media_type="application/vnd.garmin.tcx+xml",
+        headers={
+            "Content-Disposition": f'attachment; filename="liftlog-workout-{workout_id}-{stamp}.tcx"'
+        },
     )
 
 
@@ -1337,6 +1391,7 @@ def summary_page(request: Request, workout_id: int):
         # tab bar remounts at Finish Summary (item 10); no tab is highlighted
         # since the summary isn't itself one of the four destinations.
         "active_tab": "summary",
+        "workout_id": workout_id,
         "routine_name": routine_name,
         "accent": accent_for(routine_name),
         "finished": bool(workout["finished_at"]),

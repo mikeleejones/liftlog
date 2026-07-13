@@ -207,7 +207,8 @@ CREATE TABLE program_state (
     deload_deferred_until  TEXT,                        -- NULL = not deferred
     week_anchor            TEXT NOT NULL,               -- date the current week started
     program_week           INTEGER NOT NULL DEFAULT 1,  -- current week within the active program's cycle
-    objective              TEXT                         -- nullable; free text describing the program's goal (e.g. "HYROX prep, back-friendly, full-body balanced, progressive overload"). Set via Settings. Sent as context on every Haiku call so AI substitution suggestions stay aligned with intent, not just equipment/pattern matching.
+    objective              TEXT,                        -- nullable; free text describing the program's goal (e.g. "HYROX prep, back-friendly, full-body balanced, progressive overload"). Set via Settings. Sent as context on every Haiku call so AI substitution suggestions stay aligned with intent, not just equipment/pattern matching.
+    bodyweight_kg          REAL                         -- nullable; your bodyweight in kg, set once on the Profile tab. Feeds the calorie estimate for the TCX/Health export (BACKLOG item 11): calories = 6 * bodyweight_kg * (duration_seconds / 3600), the 6-MET generic strength-training average. When NULL/unset the export writes Calories 0 rather than guessing a value.
 );
 ```
 

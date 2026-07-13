@@ -25,6 +25,9 @@
   <div class="card"><div class="mono muted">no sets logged</div></div>
   {% endfor %}
 
+  {% if finished %}
+  <a class="btn-confirm btn-link sp-top" href="{{ base }}/workout/{{ workout_id }}/export.tcx">EXPORT TO HEALTH (.TCX)</a>
+  {% endif %}
   <a class="btn-primary accent-{{ accent }} btn-link sp-top" href="{{ base }}/">HOME</a>
 </div>
 {% endblock %}

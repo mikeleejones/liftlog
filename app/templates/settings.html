@@ -44,6 +44,17 @@
   </form>
 </div>
 
+<div class="section-label sp-top">bodyweight</div>
+<div class="card">
+  <div class="mono muted card-meta">your bodyweight in kg. used to estimate calories
+    for the Health (.tcx) export. leave blank to export with calories 0.</div>
+  <form method="post" action="{{ base }}/settings/bodyweight">
+    <input class="secret-input mono" type="number" name="bodyweight_kg" step="0.1" min="0"
+      inputmode="decimal" placeholder="e.g. 82.5" value="{{ bodyweight_kg }}">
+    <button class="btn-primary accent-violet" type="submit">SAVE BODYWEIGHT</button>
+  </form>
+</div>
+
 <div class="section-label sp-top">data</div>
 <div class="card">
   <div class="mono muted card-meta">{{ counts.workouts }} workouts · {{ counts.sets }} sets · {{ counts.exercises }} exercises</div>

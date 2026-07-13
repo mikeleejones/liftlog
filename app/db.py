@@ -100,7 +100,8 @@ CREATE TABLE IF NOT EXISTS program_state (
     deload_deferred_until  TEXT,
     week_anchor            TEXT NOT NULL,
     program_week           INTEGER NOT NULL DEFAULT 1,
-    objective              TEXT                      -- nullable; free-text program goal, AI context
+    objective              TEXT,                     -- nullable; free-text program goal, AI context
+    bodyweight_kg          REAL                      -- nullable; kg, feeds the TCX/Health calorie estimate (item 11)
 );
 
 -- Per-exercise AI substitution suggestion cache. Never expires in v1. One row
@@ -214,6 +215,7 @@ def init_db():
     _migrate_set_log_metrics(db)
     _migrate_exercise_equipment(db)
     _migrate_program_state_objective(db)
+    _migrate_program_state_bodyweight(db)
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     row = db.execute("SELECT id FROM program_state WHERE id = 1").fetchone()
     if row is None:
@@ -424,6 +426,15 @@ def _migrate_program_state_objective(db):
     columns = {r["name"] for r in db.execute("PRAGMA table_info(program_state)")}
     if "objective" not in columns:
         db.execute("ALTER TABLE program_state ADD COLUMN objective TEXT")
+
+
+def _migrate_program_state_bodyweight(db):
+    """Add program_state.bodyweight_kg (nullable) to a pre-item-11 database.
+    Idempotent: a simple ADD COLUMN, defaults to NULL until set on the Profile
+    tab. Feeds the TCX/Health export calorie estimate (BACKLOG item 11)."""
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(program_state)")}
+    if "bodyweight_kg" not in columns:
+        db.execute("ALTER TABLE program_state ADD COLUMN bodyweight_kg REAL")
 
 
 def can_make_ai_call(db):

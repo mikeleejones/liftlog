@@ -461,3 +461,88 @@ movement or account-level config goes in Profile; a stat/summary/dashboard
 widget goes in Home. This is the whole point of doing this pass — the next
 nine items shouldn't need a reorganization like this one.
 
+---
+
+## 11. TCX export for manual Apple Health sync
+
+Confirmed working via manual test: a TCX file with `Sport="Other"`, no GPS
+track, `DistanceMeters` 0, imports cleanly into Health via the free
+"TCX to HealthKit" App Store app — correct duration, correct start/end
+times, filed as workout type "Other" (TCX has no strength-training sport
+value, "Other" is the correct/only choice — confirmed acceptable). This
+supersedes the earlier Shortcuts/API-pull approach (item 8's
+/api/latest-workout endpoint stays, unrelated, still useful for other
+automation) with something simpler: no branching logic, no idempotency
+concerns, since it's a manual explicit action each time rather than an
+automated trigger that could double-fire.
+
+**What to build:** a "Export to Health (.tcx)" button on Finish Summary
+(and optionally also on a past workout's detail view, for logging one
+after the fact). Generates a TCX file matching the structure of the tested
+sample:
+
+```xml
+<Activity Sport="Other">
+  <Id>{workout.started_at, ISO8601}</Id>
+  <Lap StartTime="{workout.started_at, ISO8601}">
+    <TotalTimeSeconds>{duration_seconds}</TotalTimeSeconds>
+    <DistanceMeters>0</DistanceMeters>
+    <Calories>{calorie_estimate}</Calories>
+    <Intensity>Active</Intensity>
+    <TriggerMethod>Manual</TriggerMethod>
+  </Lap>
+  <Creator xsi:type="Device_t"><Name>LiftLog</Name></Creator>
+</Activity>
+```
+
+**Calorie estimate:** unlike the Shortcuts attempt, this runs server-side in
+Python, not client-side in Shortcuts' action UI — no Health-permission
+fetching, no multi-step action chain, just arithmetic. Use the same
+METs formula abandoned earlier for being too fiddly in Shortcuts: `calories
+= 6 x bodyweight_kg x (duration_seconds / 3600)` (6 METs = generic strength
+training average). This needs a bodyweight value on file.
+
+**Schema addition** (docs/schema.md): add `bodyweight_kg` (REAL, nullable)
+to `program_state` — reuse the existing singleton config table rather than
+creating a new one for a single field, consistent with keeping the schema
+lean. Add a corresponding field on the Profile tab, next to the program
+objective field, so it's set once and reused for every export. If
+`bodyweight_kg` is unset, fall back to `Calories: 0` (matching the original
+zero/zero decision) rather than guessing — never fabricate a number with no
+input to base it on.
+
+**UI:** the export button downloads the .tcx file directly (standard
+browser download, same mechanism as the existing JSON exports). No new
+auth needed — this lives on Finish Summary / workout detail, already
+behind the normal session.
+
+---
+
+## 12. iOS safe-area / layout overflow fixes
+
+Real bug, not a vague "improve compatibility" ask — screenshot shows the
+Workout tab's header text rendering underneath the iOS status bar (time,
+battery, signal icons overlapping the program name). This is the classic
+PWA `viewport-fit=cover` issue: the meta tag opts into edge-to-edge
+rendering (needed for a proper full-screen installed-app look) but nothing
+in the CSS is padding content away from the notch/Dynamic Island/status bar
+to compensate.
+
+**Fix:** apply `env(safe-area-inset-top)` as top padding on every screen's
+header/sticky-top element, and `env(safe-area-inset-bottom)` as bottom
+padding on the tab bar (item 10) so it clears the home indicator too —
+audit both, the screenshot only shows the top issue but the bottom is the
+same class of bug and easy to miss if not checked explicitly.
+
+**Also audit for horizontal overflow** while in there: confirm long routine
+names (e.g. "Full Body Strength + Back Health") wrap cleanly within their
+card rather than pushing card borders to the screen edge or overlapping
+the status bar row — test specifically with the longest real routine/
+program names currently in use, not just short placeholder text, since
+that's exactly the kind of thing that only surfaces with real data.
+
+**Test on the actual affected screen (Workout tab) first**, then spot-check
+Home, Exercises, and Profile for the same safe-area gap — this class of bug
+tends to be copy-pasted across screens if the header component isn't
+shared/componentized consistently.
+
