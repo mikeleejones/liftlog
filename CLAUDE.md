@@ -41,11 +41,12 @@ or per-set RPE. Do not add these.
   derived-value rules (progression, stall, warmup ramp), unit handling, the
   Claude JSON import format, and import/dedupe semantics. Implement exactly;
   do not add tables or columns without amending the doc.
-- `docs/design-language.md` — color tokens, typography (Inter for prose,
-  JetBrains Mono for all numeric/structural text), spacing/radius scale,
-  component specs (primary button, stepper, exercise card, rest timer bar,
-  bottom sheets, charts), motion rules, and interface copy voice. Every screen
-  derives from these tokens; no ad-hoc colors or font sizes.
+- `docs/design.md` — **v2 (light)** design language (BACKLOG item 15; v1 dark
+  is deprecated): color tokens, typography (Inter for ALL UI text, JetBrains
+  Mono for numeric/tabular data only), spacing/radius scale, component specs
+  (primary button, stepper, exercise card, rest timer bar, bottom tab bar,
+  sheets, charts), motion rules, and interface copy voice. Every screen derives
+  from these tokens; no ad-hoc colors or font sizes.
 
 ## Screens — four-tab structure (item 10)
 
@@ -108,9 +109,9 @@ Exercises tab and keeps the bar (Exercises active).
    session does not count toward weekly compliance.
 10. was_suggested flag recorded on every set (honesty audit surfaced on
     Progress screen later).
-11. Day accent colors code routines everywhere: cyan=Mon, gold=Wed, green=Fri,
-    violet=home/analysis. Green progression chip "↑ 62.5" is the signature
-    element.
+11. Day accent colors code routines everywhere: blue=Mon, teal=Wed, green=Fri,
+    indigo=home/analysis (v2 light palette; was cyan/gold/green/violet in v1).
+    Green progression chip "↑ 62.5" is the signature element.
 12. Interface copy: mono, factual, calm. No exclamation marks, no coach voice.
 13. Programs group routines (added 2026-07-02): a program is a named set of
     routines spanning one or more weeks, repeated on a weekly cycle. Several

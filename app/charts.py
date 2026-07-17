@@ -1,4 +1,4 @@
-"""SVG line-chart geometry per docs/design.md: single violet series, 2px
+"""SVG line-chart geometry per docs/design.md: single indigo series, 2px
 stroke, no fills, mono muted axis labels, dots only on PR points, deload
 weeks as muted dashed segments. Geometry computed here; the SVG is rendered
 in the template from this dict."""

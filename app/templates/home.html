@@ -10,7 +10,7 @@
 <div class="card deload-banner">
   <div class="header-row">
     <div>
-      <div class="mono accent-text-gold">deload week — weights pre-set</div>
+      <div class="mono accent-text-teal">deload week — weights pre-set</div>
       <div class="mono muted card-meta">60% × 2×10, sessions excluded from progression</div>
     </div>
     <form method="post" action="{{ base }}/deload/defer">
@@ -36,7 +36,7 @@
   <div class="progress-stats mono">
     <div><span class="muted">completed weeks</span> {{ completed_weeks }}</div>
     <div><span class="muted">since deload</span> {{ weeks_since_deload }}</div>
-    {% if deload %}<div class="accent-text-gold">deload week</div>{% endif %}
+    {% if deload %}<div class="accent-text-teal">deload week</div>{% endif %}
     {% if ready and not deload %}<div class="accent-text-green">{{ ready }} ready ↑</div>{% endif %}
   </div>
 </div>

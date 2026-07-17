@@ -57,11 +57,11 @@ templates = Jinja2Templates(
 
 init_db()
 
-DAY_ACCENTS = {"Mon": "cyan", "Wed": "gold", "Fri": "green"}
+DAY_ACCENTS = {"Mon": "blue", "Wed": "teal", "Fri": "green"}
 
 
 def accent_for(routine_name: str) -> str:
-    return DAY_ACCENTS.get(routine_name[:3], "violet")
+    return DAY_ACCENTS.get(routine_name[:3], "indigo")
 
 
 KG_PER_LB = 0.45359237

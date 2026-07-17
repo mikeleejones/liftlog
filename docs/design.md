@@ -1,8 +1,12 @@
-# Workout Tracker — Design Language (Step 5)
+# Workout Tracker — Design Language (v2, light)
 
-Direction: inherited from the back-routine reference page. Dark, calm,
-gym-legible. The aesthetic risk stays where it was: near-black surfaces with
-per-context accent colors and monospace data, everything else quiet.
+**Version note:** v1 (dark — near-black surfaces inherited from the
+back-routine reference page) is **deprecated** as of BACKLOG item 15. This
+document now describes **v2 (light)**: clean and minimal, lots of white space,
+restrained color, confident rather than decorative. Hevy is the structural
+reference (white surfaces, card-based lists, a single dark anchor at the
+bottom, generous whitespace) but with LiftLog's own palette. One dark element
+remains — the bottom tab bar.
 
 ---
 
@@ -10,34 +14,51 @@ per-context accent colors and monospace data, everything else quiet.
 
 ```css
 :root {
-  --bg:      #0c0e13;  /* app background */
-  --surface: #13161d;  /* cards, headers, sheets */
-  --card:    #191d26;  /* nested/expanded surfaces */
-  --border:  #242830;  /* all hairlines */
-  --text:    #E4E7ED;  /* primary text */
-  --muted:   #7b8492;  /* secondary text, labels */
+  --bg:      #FAFAFA;  /* app background — near-white, neutral not warm */
+  --surface: #FFFFFF;  /* cards, headers, sheets */
+  --card:    #F5F5F7;  /* nested/inset surfaces, controls */
+  --border:  #E5E5EA;  /* all hairlines */
+  --text:    #1C1C1E;  /* primary text — near-black */
+  --muted:   #8E8E93;  /* secondary text, labels */
 
-  --cyan:    #5BC8F5;  /* Monday + informational accents */
-  --gold:    #C9A96E;  /* Wednesday + warnings (deload due) */
-  --green:   #4DB88A;  /* Friday + success (progression earned, set done) */
-  --violet:  #9D8CFF;  /* Home routine + charts/analysis contexts */
-  --red:     #E06C6C;  /* destructive only (delete, abandon session) */
+  --blue:    #4C7FF0;  /* Monday + informational accents */
+  --teal:    #2FA89C;  /* Wednesday + warnings (deload due, stall) */
+  --green:   #34C759;  /* Friday + success (progression earned, set done) */
+  --indigo:  #6C63FF;  /* Home routine + charts/analysis contexts */
+  --red:     #FF3B30;  /* destructive only (delete, abandon session) */
+
+  --tabbar:  #1C1C1E;  /* bottom tab bar — the one dark anchor element */
 }
 ```
+
+Day accents remap from v1: Monday cyan→blue, Wednesday gold→teal, Friday
+green (unchanged), home/analysis violet→indigo. Warnings that were gold
+(deload due, stall) now use teal — the same Wednesday-doubles-as-warning
+coupling carried over. The internal accent slugs used in code and templates
+are `blue` / `teal` / `green` / `indigo` to match.
 
 Rules: day accents color-code routines everywhere they appear (Home card,
 Active Workout header, history entries) so the week has a consistent visual
 rhythm. Semantic uses (green = progressed) are allowed to coexist with day
 coding — context disambiguates. Accents are used for chips, dots, borders,
-and fills on small elements only; never large fills, never body text.
+and small fills (primary buttons carry a full accent fill with white text);
+never body text. Note the Apple-system greens/teals are tuned as *fill*
+colors: as text on white they read faint, so success signals prefer a fill or
+a bordered chip over bare colored text (see the timer "rest done" and chart
+notes below).
 
 ## Typography
 
 - **UI/body:** Inter, system fallback stack. 15px base, 1.4–1.55 line height.
-- **Data/labels:** JetBrains Mono (ui-monospace fallback) for anything
-  numeric or structural: weights, reps, timers, targets, set counts, section
-  labels, tab labels. Mono is the app's voice for facts; Inter for prose.
-- Section labels: 11px, 700, letter-spacing 0.12em, uppercase, --muted.
+  Inter is used for **all** UI text — labels, buttons, cues, headers, section
+  labels, tab labels, stepper/timer labels.
+- **Data only:** JetBrains Mono (ui-monospace fallback) for numeric/tabular
+  data ONLY — weights, reps, rest-timer countdown, set counts, targets
+  ("3 × 8–10"), the "last time" line, chart axis numbers, the "↑ 62.5" chip.
+  Deliberate v2 narrowing: the mono treatment for numbers stays (its column
+  alignment is functionally useful), only non-numeric text moved to Inter.
+- Section labels: 11px, 700, letter-spacing 0.08em, uppercase, --muted (Inter;
+  the wide 0.12em mono spacing tightened for Inter).
 - Gym-context floor: nothing interactive below 13px on Active Workout; the
   timer and current weight x reps render 22–28px — readable at arm's length
   on a bench.
@@ -45,9 +66,11 @@ and fills on small elements only; never large fills, never body text.
 ## Spacing & shape
 
 - Spacing scale: 4 / 8 / 12 / 16 / 24 / 32.
-- Radius: 12px cards and sheets, 10px buttons and chips, 8px small controls.
-- Borders: 1px --border everywhere; no shadows (flat dark UI, shadows read
-  as mud on #0c0e13).
+- Radius: 12px cards, sheets, and the full-width action buttons (a modest bump
+  from v1); 8px chips and small controls. Restrained, not aggressively rounded.
+- Borders: 1px --border everywhere; no shadows. On the light UI the #E5E5EA
+  hairline carries card separation (white cards on near-white --bg), keeping
+  the flat, calm look without drop shadows.
 - Max content width 560px, centered — phone-first, and on the MacBook it
   becomes a comfortable column rather than a stretched desktop layout.
   Progress/chart screens may widen to 760px.
@@ -55,11 +78,13 @@ and fills on small elements only; never large fills, never body text.
 ## Components
 
 **Primary action button** ("DID AS SUGGESTED", "START"): full-width, 56px
-tall, day-accent fill with --bg text, mono, letter-spaced. One per screen
-maximum.
+tall, day-accent fill with white (#fff) text, Inter, 12px radius,
+letter-spaced. One per screen maximum.
 
 **Stepper**: 52px square tap targets, mono value between, long-press
-auto-repeat. Unit chip sits against the value; tapping flips kg/lbs.
+auto-repeat. Unit chip sits against the value; tapping flips kg/lbs. The
+item-3 tappability sizing/spacing/chrome rules are unchanged in v2 — only the
+color values move to the light palette.
 
 **Tappability rule (applies to every interactive element):** anything
 tappable must carry a visible 1px --border AND a --surface or --card
@@ -75,30 +100,37 @@ Keep it calm — chrome for clarity, not loud colors.
 **Exercise card**: the reference page's expandable row (name + mono meta +
 chevron) carries over as the pattern for routine lists and history.
 
-**Rest timer**: full-width bar pinned to the bottom of Active Workout, mono
-countdown, thin progress line draining in the day accent, [skip] as a small
-bordered pill button (secondary weight, but unmistakably a button — not a
-bare text link). Timer end: green flash + vibration (where supported).
+**Rest timer**: full-width bar pinned to the bottom of Active Workout on
+--surface, mono countdown, progress line draining in the day accent, [skip]
+as a small bordered pill button (secondary weight, but unmistakably a button —
+not a bare text link). v2 light-theme adjustment: the line is thickened to 4px
+in a light --border track (a 2px hairline that read on near-black does not
+read on white), and the "rest done" countdown turns --text rather than green
+(Apple green as text on white is too faint) while the green signal stays in
+the fill line and the end flash. Timer end: green flash + vibration (where
+supported).
 
 **Bottom tab bar** (item 10): the app's primary navigation — four
-equal-width tabs (Home, Workout, Exercises, Profile), each an icon above a
-mono lowercase label. Fixed to the bottom of the viewport on --surface with
-a 1px --border top hairline (the same card-border treatment), inner content
-capped at the 560px column and centered so it doesn't stretch on desktop.
-Inactive tabs are --muted; the active tab uses --violet (the existing
-home/analysis accent — reuse its visual weight, do NOT introduce a fifth
-color). Respects the safe-area inset at the bottom. It is present on
-Home/Workout/Exercises/Profile (and Exercise Detail, Finish Summary), and
-cleanly UNMOUNTED — not CSS-hidden — during Active Workout and login so those
-screens keep full-screen focus. The shell already reserves bottom padding to
-clear it.
+equal-width tabs (Home, Workout, Exercises, Profile), each an icon above an
+Inter lowercase label. Fixed to the bottom of the viewport on **--tabbar**
+(#1C1C1E — the one dark anchor element; its own darkness separates it from the
+light content, so no top hairline is needed). Inner content capped at the
+560px column and centered so it doesn't stretch on desktop. Inactive tabs are
+a light grey (#AEAEB2, legible on the dark bar); the active tab uses --indigo
+(the home/analysis accent), lightened to #A79FFF for contrast on the dark bar
+— do NOT introduce a fifth color. Respects the safe-area inset at the bottom.
+It is present on Home/Workout/Exercises/Profile (and Exercise Detail, Finish
+Summary), and cleanly UNMOUNTED — not CSS-hidden — during Active Workout and
+login so those screens keep full-screen focus. The shell already reserves
+bottom padding to clear it.
 
 **Sheets** (jump list, substitution picker): bottom sheets on --surface,
 drag handle, same card idiom inside.
 
-**Charts** (Progress screens): single-series line on --violet, 2px stroke,
-no fills/gradients, mono axis labels in --muted, dots only on data points
-that were PRs. Deload weeks rendered as muted dashed segments.
+**Charts** (Progress screens): single-series line on --indigo, 2.5px stroke
+(bumped from v1's 2px so a saturated line still reads on white),
+no fills/gradients, mono axis labels in --muted, PR dots in --indigo. Deload
+weeks rendered as muted dashed segments.
 
 ## Motion
 

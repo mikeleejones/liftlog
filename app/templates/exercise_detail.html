@@ -32,7 +32,7 @@
 {% if history %}
 <div class="section-label sp-top">history</div>
 {% for h in history %}
-<div class="card history-row {{ 'accent-border-violet' if h.is_pr }}">
+<div class="card history-row {{ 'accent-border-indigo' if h.is_pr }}">
   <div class="header-row">
     <div class="mono">{{ h.date }}{% if h.is_deload %} <span class="muted">deload</span>{% endif %}</div>
     <div class="mono">

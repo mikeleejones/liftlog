@@ -17,14 +17,14 @@
       {% for e in import_errors %}<div>{{ e }}</div>{% endfor %}
     </div>
     {% endif %}
-    <button class="btn-primary accent-violet" type="submit">PREVIEW IMPORT</button>
+    <button class="btn-primary accent-indigo" type="submit">PREVIEW IMPORT</button>
   </form>
 </div>
 
 <div class="section-label sp-top">deload</div>
 <div class="card">
   {% if deload %}
-  <div class="mono accent-text-gold">deload week active</div>
+  <div class="mono accent-text-teal">deload week active</div>
   {% elif deload_deferred %}
   <div class="mono muted">deload deferred — resumes next week</div>
   {% else %}
@@ -40,7 +40,7 @@
   <form method="post" action="{{ base }}/settings/objective">
     <textarea class="import-box mono" name="objective" rows="3" spellcheck="false"
       placeholder="e.g. HYROX prep, back-friendly, full-body balanced, progressive overload">{{ objective }}</textarea>
-    <button class="btn-primary accent-violet" type="submit">SAVE OBJECTIVE</button>
+    <button class="btn-primary accent-indigo" type="submit">SAVE OBJECTIVE</button>
   </form>
 </div>
 
@@ -51,14 +51,14 @@
   <form method="post" action="{{ base }}/settings/bodyweight">
     <input class="secret-input mono" type="number" name="bodyweight_kg" step="0.1" min="0"
       inputmode="decimal" placeholder="e.g. 82.5" value="{{ bodyweight_kg }}">
-    <button class="btn-primary accent-violet" type="submit">SAVE BODYWEIGHT</button>
+    <button class="btn-primary accent-indigo" type="submit">SAVE BODYWEIGHT</button>
   </form>
 </div>
 
 <div class="section-label sp-top">data</div>
 <div class="card">
   <div class="mono muted card-meta">{{ counts.workouts }} workouts · {{ counts.sets }} sets · {{ counts.exercises }} exercises</div>
-  <a class="btn-primary accent-violet btn-link" href="{{ base }}/export">EXPORT JSON</a>
+  <a class="btn-primary accent-indigo btn-link" href="{{ base }}/export">EXPORT JSON</a>
   <div class="mono muted card-meta sp-top">program only — routines + exercises, no history. re-importable through the Import screen.</div>
   <a class="btn-confirm btn-link" href="{{ base }}/export/program">EXPORT PROGRAM ONLY</a>
 </div>

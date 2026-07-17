@@ -1,16 +1,18 @@
 :root {
-  --bg:      #0c0e13;
-  --surface: #13161d;
-  --card:    #191d26;
-  --border:  #242830;
-  --text:    #E4E7ED;
-  --muted:   #7b8492;
+  --bg:      #FAFAFA;  /* app background — near-white, neutral */
+  --surface: #FFFFFF;  /* cards, headers, sheets */
+  --card:    #F5F5F7;  /* nested/inset surfaces, controls */
+  --border:  #E5E5EA;  /* all hairlines */
+  --text:    #1C1C1E;  /* primary text — near-black */
+  --muted:   #8E8E93;  /* secondary text, labels */
 
-  --cyan:    #5BC8F5;
-  --gold:    #C9A96E;
-  --green:   #4DB88A;
-  --violet:  #9D8CFF;
-  --red:     #E06C6C;
+  --blue:    #4C7FF0;  /* Monday + informational accents */
+  --teal:    #2FA89C;  /* Wednesday + warnings (deload due, stall) */
+  --green:   #34C759;  /* Friday + success (progression earned, set done) */
+  --indigo:  #6C63FF;  /* Home routine + charts/analysis contexts */
+  --red:     #FF3B30;  /* destructive only (delete, abandon session) */
+
+  --tabbar:  #1C1C1E;  /* bottom tab bar — the one dark anchor element */
 
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
@@ -40,14 +42,16 @@ body {
 }
 .shell-wide { max-width: 760px; }
 
+/* mono is reserved for numeric/tabular data (weights, reps, timers, counts);
+   all prose, labels, buttons, and headers use Inter (--font-ui). */
 .mono { font-family: var(--font-mono); }
 .muted { color: var(--muted); }
 
 .section-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -55,20 +59,20 @@ body {
 .sp-top { margin-top: 24px; }
 
 /* accents */
-.accent-text-cyan   { color: var(--cyan); }
-.accent-text-gold   { color: var(--gold); }
+.accent-text-blue   { color: var(--blue); }
+.accent-text-teal   { color: var(--teal); }
 .accent-text-green  { color: var(--green); }
-.accent-text-violet { color: var(--violet); }
+.accent-text-indigo { color: var(--indigo); }
 
-.accent-border-cyan   { border-left: 3px solid var(--cyan); }
-.accent-border-gold   { border-left: 3px solid var(--gold); }
+.accent-border-blue   { border-left: 3px solid var(--blue); }
+.accent-border-teal   { border-left: 3px solid var(--teal); }
 .accent-border-green  { border-left: 3px solid var(--green); }
-.accent-border-violet { border-left: 3px solid var(--violet); }
+.accent-border-indigo { border-left: 3px solid var(--indigo); }
 
-.accent-cyan-ctx   { --accent: var(--cyan); }
-.accent-gold-ctx   { --accent: var(--gold); }
+.accent-blue-ctx   { --accent: var(--blue); }
+.accent-teal-ctx   { --accent: var(--teal); }
 .accent-green-ctx  { --accent: var(--green); }
-.accent-violet-ctx { --accent: var(--violet); }
+.accent-indigo-ctx { --accent: var(--indigo); }
 
 /* cards */
 .card {
@@ -92,19 +96,19 @@ body {
   height: 56px;
   margin-top: 16px;
   border: none;
-  border-radius: 10px;
-  font-family: var(--font-mono);
+  border-radius: 12px;
+  font-family: var(--font-ui);
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--bg);
+  letter-spacing: 0.06em;
+  color: #fff;
   cursor: pointer;
 }
 .btn-link { line-height: 56px; text-align: center; text-decoration: none; }
-.accent-cyan   { background: var(--cyan); }
-.accent-gold   { background: var(--gold); }
+.accent-blue   { background: var(--blue); }
+.accent-teal   { background: var(--teal); }
 .accent-green  { background: var(--green); }
-.accent-violet { background: var(--violet); }
+.accent-indigo { background: var(--indigo); }
 
 .btn-danger {
   display: block;
@@ -113,11 +117,11 @@ body {
   margin-top: 12px;
   background: var(--surface);
   border: 1px solid var(--red);
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--red);
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   cursor: pointer;
 }
 
@@ -129,11 +133,11 @@ body {
   margin-top: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--text);
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   cursor: pointer;
 }
 .btn-confirm:active { border-color: var(--muted); }
@@ -148,6 +152,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text);
+  font-family: var(--font-ui);
   font-size: 13px;
   padding: 8px 14px;
   cursor: pointer;
@@ -184,17 +189,17 @@ body {
 }
 .nav-links a:active { border-color: var(--muted); }
 
-/* bottom tab bar — four equal-width tabs, icon + label. 1px top border in the
-   card-hairline treatment; active tab uses the existing --violet accent (no new
-   color). Fixed to the viewport; the shell's 120px bottom padding clears it.
-   Rendered only on Home/Workout/Exercises/Profile (+ Finish Summary); unmounted
-   during Active Workout and login. */
+/* bottom tab bar — four equal-width tabs, icon + label. The one dark anchor
+   element (--tabbar) on the otherwise-light UI; its own darkness separates it
+   from content so it needs no top hairline. Active tab uses --indigo (the
+   home/analysis accent — no fifth color). Fixed to the viewport; the shell's
+   120px bottom padding clears it. Rendered only on Home/Workout/Exercises/
+   Profile (+ Finish Summary); unmounted during Active Workout and login. */
 .tabbar {
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 40;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+  background: var(--tabbar);
   padding-bottom: env(safe-area-inset-bottom);
 }
 .tabbar-inner {
@@ -211,13 +216,14 @@ body {
   gap: 3px;
   min-height: 54px;
   padding: 7px 0 6px;
-  color: var(--muted);
+  color: #AEAEB2;  /* light grey — legible on the dark bar */
   text-decoration: none;
+  font-family: var(--font-ui);
   font-size: 11px;
   letter-spacing: 0.04em;
 }
 .tab svg { width: 22px; height: 22px; }
-.tab.is-active { color: var(--violet); }
+.tab.is-active { color: #A79FFF; }  /* lightened --indigo for contrast on dark */
 
 /* exercises search */
 .search-row { display: flex; gap: 8px; margin: 12px 0 4px; }
@@ -278,10 +284,10 @@ body {
   resize: vertical;
   outline: none;
 }
-.import-box:focus { border-color: var(--violet); }
+.import-box:focus { border-color: var(--indigo); }
 .import-errors { color: var(--red); font-size: 13px; margin-top: 8px; }
 .import-create { color: var(--green); }
-.import-replace { color: var(--gold); }
+.import-replace { color: var(--teal); }
 .import-archive { color: var(--red); }
 /* active/archived view toggle — segmented control, same chrome as buttons */
 .view-tabs {
@@ -299,16 +305,17 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--muted);
+  font-family: var(--font-ui);
   font-size: 13px;
   letter-spacing: 0.04em;
   text-decoration: none;
 }
 .view-tab.is-active {
-  color: var(--violet);
-  border-color: var(--violet);
+  color: var(--indigo);
+  border-color: var(--indigo);
 }
 
-.program-card.program-active { border-color: var(--violet); }
+.program-card.program-active { border-color: var(--indigo); }
 .week-label { margin-top: 12px; }
 .import-primary {
   font-size: 11px;
@@ -328,8 +335,8 @@ body {
   align-self: flex-start;
 }
 .chip-progress { color: var(--green); border: 1px solid var(--green); }
-.chip-stall { color: var(--gold); border: 1px solid var(--gold); }
-.deload-banner { border-color: var(--gold); }
+.chip-stall { color: var(--teal); border: 1px solid var(--teal); }
+.deload-banner { border-color: var(--teal); }
 
 /* small inline action / video-link chip: bordered pill with fill */
 .link-chip {
@@ -341,6 +348,7 @@ body {
   border-radius: 8px;
   padding: 6px 12px;
   color: var(--text);
+  font-family: var(--font-ui);
   font-size: 13px;
   text-decoration: none;
   cursor: pointer;
@@ -368,13 +376,13 @@ body {
   height: 52px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--text);
   font-size: 16px;
   padding: 0 16px;
   outline: none;
 }
-.secret-input:focus { border-color: var(--violet); }
+.secret-input:focus { border-color: var(--indigo); }
 .login-error { color: var(--red); font-size: 13px; margin-top: 8px; }
 
 /* automation tokens (settings) */
@@ -439,12 +447,14 @@ body {
 .current-set-label { margin-bottom: 8px; }
 
 .last-line {
+  font-family: var(--font-mono);
   font-size: 14px;
   color: var(--text);
   text-align: center;
   margin: 6px 0 2px;
 }
 .last-line .last-tag {
+  font-family: var(--font-ui);
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -505,14 +515,17 @@ body {
   flex: 1;
 }
 .stepper-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   color: var(--muted);
   text-align: center;
   margin-top: 4px;
 }
 
-/* timer bar */
+/* timer bar — pinned to the bottom of Active Workout. On the light UI the
+   progress line is thickened to 4px and sits in a light --border track so the
+   draining accent fill stays legible (a 2px hairline that read on near-black
+   does not read on white). */
 .timer-bar {
   position: fixed;
   left: 0; right: 0; bottom: 0;
@@ -520,8 +533,8 @@ body {
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
 }
-.timer-line { height: 2px; background: var(--border); }
-.timer-line-fill { height: 2px; background: var(--accent, var(--cyan)); width: 100%; }
+.timer-line { height: 4px; background: var(--border); }
+.timer-line-fill { height: 4px; background: var(--accent, var(--blue)); width: 100%; }
 .timer-row {
   max-width: 560px;
   margin: 0 auto;
@@ -530,17 +543,19 @@ body {
   padding: 10px 16px;
   gap: 12px;
 }
-.timer-count { font-size: 24px; font-weight: 500; }
-.timer-label { flex: 1; font-size: 13px; }
+.timer-count { font-family: var(--font-mono); font-size: 24px; font-weight: 500; }
+.timer-label { font-size: 13px; flex: 1; }
 .timer-row .btn-quiet { min-height: 36px; padding: 6px 12px; }
 .timer-bar.done .timer-line-fill { background: var(--green); }
-.timer-bar.done .timer-count { color: var(--green); }
+/* "rest done" uses --text, not green: #34C759 as text on white is too faint —
+   the green signal lives in the fill line and the flash instead. */
+.timer-bar.done .timer-count { color: var(--text); }
 
 /* sheets */
 .sheet-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.4);
   z-index: 10;
 }
 .sheet {
@@ -578,7 +593,7 @@ body {
   text-align: left;
 }
 .jump-row .mono { font-size: 13px; }
-.jump-row.current { border-color: var(--accent, var(--cyan)); }
+.jump-row.current { border-color: var(--accent, var(--blue)); }
 .jump-row .done { color: var(--green); }
 .sheet-finish { margin-top: 16px; }
 
@@ -600,7 +615,7 @@ body {
   }
   .timer-bar.done .timer-row { animation: flash 400ms ease; }
   @keyframes flash {
-    0% { background: rgba(77, 184, 138, 0.25); }
+    0% { background: rgba(52, 199, 89, 0.18); }
     100% { background: transparent; }
   }
 }
@@ -609,9 +624,9 @@ body {
 .chart-card { padding-bottom: 8px; }
 .chart { display: block; margin-top: 12px; overflow: visible; }
 .chart-axis { stroke: var(--border); stroke-width: 1; }
-.chart-line { stroke: var(--violet); stroke-width: 2; fill: none; stroke-linecap: round; }
+.chart-line { stroke: var(--indigo); stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .chart-deload { stroke: var(--muted); stroke-dasharray: 4 4; }
-.chart-pr { fill: var(--violet); }
+.chart-pr { fill: var(--indigo); }
 .chart-label { fill: var(--muted); font-family: var(--font-mono); font-size: 11px; }
 .chart-legend { font-size: 11px; margin-top: 4px; }
 
@@ -626,4 +641,4 @@ body {
 .lift-row { text-decoration: none; color: var(--text); }
 .lift-name { font-size: 16px; }
 .history-row { margin-top: 8px; }
-.audit-note { margin-top: 4px; color: var(--gold); }
+.audit-note { margin-top: 4px; color: var(--teal); }
