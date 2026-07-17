@@ -58,6 +58,10 @@ A persistent bottom tab bar with four destinations:
   separate screen; `/progress` redirects to Home.
 - **Workout** — the routines list (Active/Archived tabs, per-routine
   Archive/Delete); where a session starts from. Backing URL `/routines`.
+  Tapping a routine row opens a read-only preview of its exercises
+  (`/routines/{id}/preview`, keeps the tab bar) — the preview creates no
+  workout and starts no timer; only an explicit START (present on both the
+  preview and the quick-start cards) begins a session.
 - **Exercises** — the full exercise library, searchable by name. The front
   door to Exercise Detail, which is no longer reachable only through a routine.
 - **Profile** — Import (paste JSON + preview), both exports (full backup +

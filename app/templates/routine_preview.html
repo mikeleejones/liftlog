@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ routine.name }} — liftlog{% endblock %}
+{% block content %}
+<header class="app-header header-row">
+  <div>
+    <div class="section-label">routine preview</div>
+    <div class="card-title accent-text-{{ accent }}">{{ routine.name }}</div>
+    <div class="mono muted card-meta">{{ exercises | length }} exercise{{ '' if exercises | length == 1 else 's' }} · read-only</div>
+  </div>
+  <nav class="mono nav-links"><a href="{{ base }}/routines">workout</a></nav>
+</header>
+
+{% for ex in exercises %}
+<div class="card preview-row">
+  <div class="header-row">
+    <div class="card-title preview-name">{{ loop.index }}. {{ ex.name }}</div>
+    {% if ex.is_primary %}<span class="mono muted preview-primary">primary</span>{% endif %}
+  </div>
+  <div class="mono muted card-meta">{{ ex.target }}</div>
+  {% if ex.cue %}<div class="exercise-cue">{{ ex.cue }}</div>{% endif %}
+</div>
+{% else %}
+<div class="card"><div class="mono muted">this routine has no exercises</div></div>
+{% endfor %}
+
+<form method="post" action="{{ base }}/workout/start" class="preview-start">
+  <input type="hidden" name="routine_id" value="{{ routine.id }}">
+  <button class="btn-primary accent-{{ accent }}" type="submit">START</button>
+</form>
+<div class="mono muted card-meta preview-note">previewing changes nothing — start creates the session.</div>
+{% endblock %}

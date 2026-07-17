@@ -168,6 +168,59 @@ def set_cell(exercise_type: str, row, unit: str):
     return "done", ""  # none
 
 
+def _last_text(exercise_type: str, sets, unit: str) -> str:
+    """Compact one-line summary of a past session's working sets, in display
+    units, for the Active Workout 'last time' line (BACKLOG item 13). weight_reps
+    states the weight once when it was uniform (e.g. '60 kg × 10,10,10'), matching
+    the original wireframe; other types join per-set cells."""
+    if exercise_type == "weight_reps":
+        reps = ",".join(str(int(s["reps"])) for s in sets)
+        weights = {s["weight_kg"] for s in sets}
+        if len(weights) == 1:
+            return f"{fmt_weight(sets[0]['weight_kg'], unit)} {unit} × {reps}"
+        return ", ".join(f"{fmt_weight(s['weight_kg'], unit)}×{int(s['reps'])}" for s in sets)
+    if exercise_type == "reps_only":
+        return ",".join(str(int(s["reps"])) for s in sets) + " reps"
+    if exercise_type == "duration":
+        return ", ".join(fmt_duration(s["duration_seconds"]) for s in sets)
+    if exercise_type == "distance":
+        return ", ".join(f"{fmt_distance(s['distance_m'], unit)} {unit}" for s in sets)
+    if exercise_type == "duration_weight":
+        return ", ".join(f"{fmt_weight(s['weight_kg'], unit)}{unit}·{fmt_duration(s['duration_seconds'])}" for s in sets)
+    if exercise_type == "distance_weight":
+        return ", ".join(f"{fmt_distance(s['distance_m'], unit)}{unit}·{fmt_weight(s['weight_kg'], 'kg')}kg" for s in sets)
+    return ""
+
+
+def last_session_summary(db, exercise, exclude_workout_id):
+    """The most recent non-deload session's working sets for this exercise as
+    {'text', 'date'}, or None if never done (BACKLOG item 13). This is factual
+    history shown mid-set, so — like charts and Exercise Detail — it ignores
+    progress_reset_at; it is not a suggestion. 'none'-type exercises have nothing
+    to show."""
+    if exercise["exercise_type"] == "none":
+        return None
+    row = db.execute(
+        "SELECT w.id AS wid, w.started_at FROM set_log s "
+        "JOIN workout w ON w.id = s.workout_id "
+        "WHERE s.exercise_id = ? AND s.set_type = 'normal' AND w.is_deload = 0 "
+        "AND w.id != ? ORDER BY w.started_at DESC, w.id DESC LIMIT 1",
+        (exercise["id"], exclude_workout_id or 0),
+    ).fetchone()
+    if row is None:
+        return None
+    sets = db.execute(
+        "SELECT weight_kg, reps, duration_seconds, distance_m FROM set_log "
+        "WHERE workout_id = ? AND exercise_id = ? AND set_type = 'normal' "
+        "ORDER BY set_number",
+        (row["wid"], exercise["id"]),
+    ).fetchall()
+    if not sets:
+        return None
+    return {"text": _last_text(exercise["exercise_type"], sets, exercise["display_unit"]),
+            "date": row["started_at"][:10]}
+
+
 def parse_ts(ts: str) -> datetime:
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
@@ -447,6 +500,50 @@ def routines_page(request: Request, imported: int = 0, view: str = "active"):
         })
     db.close()
     return templates.TemplateResponse(request, "routines.html", context)
+
+
+def _target_text(exercise_type: str, target_sets, rep_min, rep_max, rest_seconds) -> str:
+    """The prescription line for a routine_exercise ('3 × 8–10 · rest 90s'),
+    mirroring Active Workout's own target line."""
+    if exercise_type == "none":
+        return f"mark done · rest {rest_seconds}s"
+    reps = str(rep_min) if rep_min == rep_max else f"{rep_min}–{rep_max}"
+    return f"{target_sets} × {reps} · rest {rest_seconds}s"
+
+
+@app.get("/routines/{routine_id}/preview", response_class=HTMLResponse)
+def routine_preview(request: Request, routine_id: int):
+    """Read-only look at a routine's exercises before committing to a session
+    (BACKLOG item 14). Creates no workout and starts no timer — the only way to
+    begin a session is the explicit START form (POST /workout/start)."""
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    routine = db.execute("SELECT * FROM routine WHERE id = ?", (routine_id,)).fetchone()
+    if routine is None:
+        db.close()
+        return redirect(request, "/routines")
+    rows = db.execute(
+        "SELECT re.target_sets, re.rep_min, re.rep_max, re.rest_seconds, re.is_primary, "
+        "e.name, e.cue, e.exercise_type FROM routine_exercise re "
+        "JOIN exercise e ON e.id = re.exercise_id "
+        "WHERE re.routine_id = ? ORDER BY re.position",
+        (routine_id,),
+    ).fetchall()
+    db.close()
+    exercises = [{
+        "name": r["name"],
+        "cue": r["cue"],
+        "is_primary": bool(r["is_primary"]),
+        "target": _target_text(r["exercise_type"], r["target_sets"],
+                               r["rep_min"], r["rep_max"], r["rest_seconds"]),
+    } for r in rows]
+    return templates.TemplateResponse(request, "routine_preview.html", {
+        "active_tab": "workout",
+        "routine": routine,
+        "accent": accent_for(routine["name"]),
+        "exercises": exercises,
+    })
 
 
 @app.post("/programs/{program_id}/activate")
@@ -957,6 +1054,7 @@ def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
         "warmups_logged": warmups_logged,
         "skipped": False,
         "sets": [dict(row) for row in sets],
+        "last": last_session_summary(db, exercise, workout_id),
     }
 
 

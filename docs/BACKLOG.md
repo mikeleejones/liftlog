@@ -546,3 +546,99 @@ Home, Exercises, and Profile for the same safe-area gap — this class of bug
 tends to be copy-pasted across screens if the header component isn't
 shared/componentized consistently.
 
+---
+
+## 13. Ensure "last time" weight/reps is always visible mid-set
+
+This was part of the original Active Workout design from day one (see the
+very first wireframe: "Last: 60kg × 10,10,10 → try 62.5") — audit whether
+it's actually missing, or present but not prominent enough to notice under
+gym pressure. Either way, the fix is the same: make it a permanent, clearly
+visible element on every exercise card during Active Workout, not
+something that requires scrolling or a tap to reveal. Should sit near the
+weight/rep stepper, not buried above the fold.
+
+---
+
+## 14. Preview a routine's exercises without starting a session
+
+Currently tapping a routine on the Workout tab leads toward starting it.
+Add a read-only preview: tapping a routine row opens its exercise list
+(names, sets/reps/rest targets, order) without creating a workout or
+starting any timer. A separate, explicit "Start" action begins the actual
+session from either the preview or the Workout tab list directly — the
+preview is purely informational, never a side-door into starting a
+workout.
+
+---
+
+## 15. Full light-theme redesign (supersedes the original dark theme)
+
+This reverses the visual direction set at original design time (CLAUDE.md's
+"inherited from the back-routine reference page" decision) — a deliberate
+reversal, not a bug fix. Update docs/design-language.md's header to note
+v1 (dark) is deprecated, this is v2 (light), and CLAUDE.md's design
+language reference should point to this version.
+
+**Personality:** clean and minimal — lots of white space, restrained color
+use, confident rather than decorative. Hevy is the structural reference
+point (white surfaces, card-based lists, a dark neutral anchor at the
+bottom, generous whitespace) but with LiftLog's own fresh palette, not a
+clone of Hevy's specific colors.
+
+**New color tokens** (full replacement of the v1 dark token set):
+
+```css
+:root {
+  --bg:      #FAFAFA;  /* near-white, neutral not warm */
+  --surface: #FFFFFF;
+  --card:    #F5F5F7;  /* light neutral grey */
+  --border:  #E5E5EA;
+  --text:    #1C1C1E;  /* near-black */
+  --muted:   #8E8E93;
+
+  --blue:    #4C7FF0;  /* Monday */
+  --teal:    #2FA89C;  /* Wednesday */
+  --green:   #34C759;  /* Friday + success/progression (dual role, same pattern as old sage/green) */
+  --indigo:  #6C63FF;  /* Home/analysis contexts */
+  --red:     #FF3B30;  /* destructive only */
+
+  --tabbar:  #1C1C1E;  /* the one dark element — bottom tab bar, near-black not navy */
+}
+```
+
+**Typography:** Inter for all UI text, labels, buttons, cues, headers.
+JetBrains Mono RETAINED, but only for numeric/tabular data — weights,
+reps, rest timer countdown, set counts. Deliberate carryover from v1: mono
+alignment is functionally useful for numbers, the complaint was about
+buttons/labels feeling cold, not about the numbers themselves.
+
+**Shape:** modest rounding, restrained — cards and buttons at 12px radius
+(a small bump from v1's 10-12px, not an aggressive softening). Clean and
+minimal means confident whitespace, not maximal roundness.
+
+**Component updates required:**
+- Primary button: blue or day-appropriate accent fill, white text, rounder
+  per above, full-width.
+- Stepper: same functional sizing from the item 3 tappability pass
+  (44-52px targets), retextured for light surfaces — must remain clearly
+  bordered/filled per item 3's "visible chrome, never bare text" rule,
+  which still applies regardless of theme.
+- Exercise card: white surface, light grey border, moderate corner radius.
+- Rest timer bar: needs real contrast testing on light backgrounds — a
+  thin progress line that worked on near-black won't necessarily read
+  well on off-white; verify visibility explicitly rather than assuming
+  the same treatment translates.
+- Bottom tab bar: near-black per token above, active-tab indicator uses
+  the relevant day accent.
+- Charts: verify the single-series line + PR dots treatment still reads
+  clearly against light backgrounds.
+
+**Explicitly carries over unchanged from v1** (these were separate fixes,
+not dark-theme-specific): the item 3 tappability rules (visible chrome on
+every interactive element, 8px minimum spacing), the item 12 safe-area
+fixes, the "no exclamation marks, no coach voice" copy rules.
+
+This touches every screen — treat as its own dedicated build like item 10,
+not something to combine with any other backlog item.
+

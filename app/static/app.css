@@ -250,6 +250,23 @@ body {
 /* name grows to fill the line and wraps; the action group keeps its size */
 .routine-line > :first-child { flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
 .routine-line-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+/* tapping a routine name opens its read-only preview (BACKLOG item 14) */
+.routine-line-link { color: var(--text); text-decoration: none; }
+.routine-line-link:active { color: var(--muted); }
+/* the quick-start card's tap area for preview, kept distinct from its START btn */
+.routine-card-link { display: block; text-decoration: none; color: inherit; }
+
+/* routine preview screen */
+.preview-row { margin-top: 8px; }
+.preview-name { font-size: 16px; }
+.preview-primary {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+.preview-start { margin-top: 20px; }
+.preview-note { text-align: center; margin-top: 8px; }
 .import-box {
   width: 100%;
   background: var(--card);
@@ -420,6 +437,19 @@ body {
 
 .current-set { margin-top: 16px; }
 .current-set-label { margin-bottom: 8px; }
+
+.last-line {
+  font-size: 14px;
+  color: var(--text);
+  text-align: center;
+  margin: 6px 0 2px;
+}
+.last-line .last-tag {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 6px;
+}
 
 .big-value {
   font-family: var(--font-mono);

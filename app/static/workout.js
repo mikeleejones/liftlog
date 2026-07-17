@@ -309,12 +309,18 @@ function render() {
     const steppersHtml = axes.length
       ? `<div class="steppers">${axes.map((a) => stepperBlock(ex, a)).join("")}</div>`
       : "";
+    // "last time" is always visible mid-set, right by the stepper, no tap/scroll
+    // to reveal (BACKLOG item 13). Omitted only when there's no prior session.
+    const lastHtml = ex.last
+      ? `<div class="last-line mono"><span class="last-tag">last</span> ${esc(ex.last.text)}</div>`
+      : "";
     html += `
       <div class="current-set">
         <div class="header-row">
           <div class="section-label current-set-label">${label}</div>
           ${warmup ? `<button class="link-chip mono" id="skip-warmups-btn" type="button">skip warmups</button>` : ""}
         </div>
+        ${lastHtml}
         ${bigHtml}
         ${steppersHtml}
         <button class="btn-primary accent-${state.accent}" id="log-btn" type="button">${logLabel(ex)}</button>
