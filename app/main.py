@@ -371,7 +371,8 @@ def _program_overview(db, active, program_week):
     lifts = []
     if active:
         rows = db.execute(
-            "SELECT re.target_sets, re.rep_min, re.rep_max, e.* FROM routine_exercise re "
+            "SELECT re.target_sets, re.rep_min, re.rep_max, re.is_primary, e.* "
+            "FROM routine_exercise re "
             "JOIN exercise e ON e.id = re.exercise_id "
             "JOIN routine r ON r.id = re.routine_id "
             "WHERE r.program_id = ? AND r.week_number = ? AND r.is_archived = 0 "
@@ -399,13 +400,16 @@ def _program_overview(db, active, program_week):
                 # compact primary-metric value for the progress/stall chip only
                 "suggest": fmt_primary(etype, s[primary], unit) if primary else "—",
                 "kind": s["kind"],
+                "tier": 0 if re["is_primary"] else (1 if etype == "weight_reps" else 2),
             })
-    # Actionable lifts first — progress-ready, then stalled — each group keeping
-    # its program order (sort is stable). The list runs to every lift in the
-    # week, mobility work included, so without this the two or three rows worth
-    # acting on sit wherever the routine happens to put them (item 21). Nothing
-    # is hidden; only the order changes.
-    lifts.sort(key=lambda l: {"progress": 0, "stall": 1}.get(l["kind"], 2))
+    # Big lifts first: is_primary compounds, then the rest of the loaded work,
+    # then bodyweight/mobility — each tier keeping its program order (sort is
+    # stable). is_primary is the app's own existing notion of a main lift (it
+    # already drives warmup ramps), so this needs no new concept. An earlier
+    # pass sorted by actionability instead, which floated eight mobility
+    # exercises above Back Squat — technically "what's ready to progress", but
+    # not what you scan Home for. Nothing is hidden; only the order changes.
+    lifts.sort(key=lambda l: l["tier"])
     # honesty audit (decision 10): share of working sets logged as-suggested
     audit = db.execute(
         "SELECT COUNT(*) AS total, COALESCE(SUM(was_suggested), 0) AS suggested "
