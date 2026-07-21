@@ -142,6 +142,26 @@ Summary), and cleanly UNMOUNTED — not CSS-hidden — during Active Workout and
 login so those screens keep full-screen focus. The shell reserves 120px bottom
 padding so content can scroll clear of the floating pill.
 
+**Completion calendar** (item 21): the Home grid of which days had a completed
+session. One `mono` weekday header row (M T W T F S S), then one row of day
+cells per week, three weeks by default ending with the current week. Cells are
+1:1 aspect-ratio squares at 8px radius in a 7-column grid with 6px gutters,
+carrying the day number in 12px mono. A completed day fills with that routine's
+own day accent (via accent-*-ctx's --accent) in white text, so the grid speaks
+the same colour language as the routine cards; an ad-hoc session with no routine
+takes --indigo. Everything else is an empty --card cell with --muted text.
+Future days drop to 0.4 opacity so they read as "not yet", never as missed.
+Today is OUTLINED in --text rather than filled — a fill would read as completed.
+One cell per day: a second session the same day doesn't get its own cell.
+
+**Stat tiles** (item 21): a 2-column grid of small cards, 8px gutters, each a
+big mono number (26px, weight 500) over an 11px --muted Inter label. The number
+carries the meaning, the label only names it. Colour is applied to the number
+alone and only when it's non-zero and worth noticing — --green for lifts ready
+to progress, --teal for stalled and for an active deload week — otherwise plain
+--text. Used on Home for the progression summary that replaced the old plain
+text stat row.
+
 **Minimized-session bar** (item 20): a mini-player strip pinned directly above
 the tab pill, using the SAME glass recipe (rgba(255,255,255,0.75), 20px blur
 with the -webkit- prefix, the same border/shadow, the same width and centering)

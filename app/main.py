@@ -400,6 +400,12 @@ def _program_overview(db, active, program_week):
                 "suggest": fmt_primary(etype, s[primary], unit) if primary else "—",
                 "kind": s["kind"],
             })
+    # Actionable lifts first — progress-ready, then stalled — each group keeping
+    # its program order (sort is stable). The list runs to every lift in the
+    # week, mobility work included, so without this the two or three rows worth
+    # acting on sit wherever the routine happens to put them (item 21). Nothing
+    # is hidden; only the order changes.
+    lifts.sort(key=lambda l: {"progress": 0, "stall": 1}.get(l["kind"], 2))
     # honesty audit (decision 10): share of working sets logged as-suggested
     audit = db.execute(
         "SELECT COUNT(*) AS total, COALESCE(SUM(was_suggested), 0) AS suggested "
@@ -412,6 +418,95 @@ def _program_overview(db, active, program_week):
         "suggested_pct": suggested_pct,
         "audit_total": audit["total"],
     }
+
+
+def _volume_history(db, limit=12):
+    """Total tonnage per completed session, oldest first, for Home's volume
+    chart (BACKLOG item 21).
+
+    Volume is defined exactly as the TCX and latest-workout endpoints define it
+    — weight x reps over working sets of weight_reps exercises — so the number
+    on Home always agrees with the one those export. Sessions with no
+    weight_reps work at all (a mobility-only day) are left out rather than
+    plotted as a zero: they weren't zero-effort sessions, they just have no
+    tonnage to compare, and a 0 would flatten the whole series.
+
+    A 'PR' here is a volume record: strictly above every earlier session's, with
+    deload weeks unable to earn one — the same rule Exercise Detail's chart uses
+    for its top-set PRs."""
+    rows = db.execute(
+        "SELECT w.id, w.started_at, w.is_deload, r.name AS routine_name, "
+        "  (SELECT COALESCE(SUM(s.weight_kg * s.reps), 0) FROM set_log s "
+        "   JOIN exercise e ON e.id = s.exercise_id "
+        "   WHERE s.workout_id = w.id AND s.set_type = 'normal' "
+        "     AND e.exercise_type = 'weight_reps' "
+        "     AND s.weight_kg IS NOT NULL AND s.reps IS NOT NULL) AS volume "
+        "FROM workout w LEFT JOIN routine r ON r.id = w.routine_id "
+        "WHERE w.finished_at IS NOT NULL "
+        "ORDER BY w.started_at DESC, w.id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    sessions = [r for r in reversed(rows) if r["volume"] > 0]
+    best = None
+    points = []
+    for r in sessions:
+        volume = round(r["volume"])
+        is_pr = (not r["is_deload"]) and (best is None or volume > best)
+        if is_pr:
+            best = volume
+        points.append({
+            "value": volume,
+            "is_pr": is_pr,
+            "is_deload": bool(r["is_deload"]),
+            "label": r["started_at"][5:10],
+        })
+    return points
+
+
+DAY_LETTERS = ("M", "T", "W", "T", "F", "S", "S")
+
+
+def _completion_calendar(db, weeks=3):
+    """Day-cell grid of completed sessions for the last `weeks` weeks, ending
+    with the current (Mon-Sun) week (BACKLOG item 21). A filled cell carries the
+    routine's own day accent, so the grid reads as the same colour language as
+    the routine cards; an ad-hoc session with no routine falls back to the
+    indigo home/analysis accent.
+
+    Dates come from started_at[:10] — UTC, matching every other date the app
+    shows (Exercise Detail history, the chart labels) rather than introducing a
+    second, inconsistent notion of what day a session happened on."""
+    today = datetime.now(timezone.utc).date()
+    week_start = today - timedelta(days=today.weekday())
+    first = week_start - timedelta(weeks=weeks - 1)
+    rows = db.execute(
+        "SELECT w.started_at, r.name AS routine_name FROM workout w "
+        "LEFT JOIN routine r ON r.id = w.routine_id "
+        "WHERE w.finished_at IS NOT NULL AND w.started_at >= ? "
+        "ORDER BY w.started_at",
+        (first.strftime("%Y-%m-%dT00:00:00Z"),),
+    ).fetchall()
+    done = {}
+    for r in rows:
+        # first session of a day owns the cell's colour; a second same-day
+        # session doesn't get its own cell (the grid is one cell per day)
+        done.setdefault(r["started_at"][:10], accent_for(r["routine_name"] or ""))
+    grid = []
+    for w in range(weeks):
+        cells = []
+        for d in range(7):
+            day = first + timedelta(weeks=w, days=d)
+            iso = day.isoformat()
+            cells.append({
+                "date": iso,
+                "day_letter": DAY_LETTERS[d],
+                "day_number": day.day,
+                "accent": done.get(iso),
+                "is_today": day == today,
+                "is_future": day > today,
+            })
+        grid.append(cells)
+    return grid
 
 
 def _quick_start_cards(db, active, program_week):
@@ -478,11 +573,20 @@ def home(request: Request):
     )
 
     overview = _program_overview(db, active, state["program_week"])
+    volume_points = _volume_history(db)
+    calendar = _completion_calendar(db)
     db.close()
+    latest_volume = volume_points[-1]["value"] if volume_points else None
     return templates.TemplateResponse(request, "home.html", {
         "active_tab": "home",
         "sessions_this_week": sessions_this_week,
         "sessions_required": required,
+        "volume_chart": charts.line_chart(volume_points),
+        "latest_volume": f"{latest_volume:,}" if latest_volume is not None else None,
+        "volume_is_pr": bool(volume_points and volume_points[-1]["is_pr"]),
+        "calendar": calendar,
+        "weeks_to_deload": max(0, 3 - state["weeks_since_deload"]),
+        "stalled": sum(1 for l in overview["lifts"] if l["kind"] == "stall"),
         "program": active,
         "program_week": state["program_week"],
         "completed_weeks": state["completed_weeks"],

@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}liftlog{% endblock %}
 {% block content %}
+{# Home v2 (BACKLOG item 21). Order is deliberate: anything ACTIONABLE right now
+   sits above the fold (deload banner, resume card, this week's grid), the two
+   visual answers to "am I actually progressing" come next (volume chart, then
+   the progression tiles), and the per-lift detail and audit sit below as
+   reference. The old version led with a text stat row, which is why none of it
+   got used. #}
 <header class="app-header">
   <div class="section-label">liftlog</div>
   <div class="mono muted week-count">{{ sessions_this_week }} of {{ sessions_required }} sessions this week</div>
@@ -31,13 +37,57 @@
 </a>
 {% endif %}
 
-<div class="section-label sp-top">program overview</div>
+<div class="section-label sp-top">last 3 weeks</div>
 <div class="card">
-  <div class="progress-stats mono">
-    <div><span class="muted">completed weeks</span> {{ completed_weeks }}</div>
-    <div><span class="muted">since deload</span> {{ weeks_since_deload }}</div>
-    {% if deload %}<div class="accent-text-teal">deload week</div>{% endif %}
-    {% if ready and not deload %}<div class="accent-text-green">{{ ready }} ready ↑</div>{% endif %}
+  <div class="cal">
+    {# one weekday header, then a cell row per week — repeating the letters on
+       every row would be noise at this size #}
+    <div class="cal-row cal-head">
+      {% for d in calendar[0] %}<div class="mono muted cal-day">{{ d.day_letter }}</div>{% endfor %}
+    </div>
+    {% for week in calendar %}
+    <div class="cal-row">
+      {% for c in week %}
+      <div class="cal-cell{% if c.accent %} is-done accent-{{ c.accent }}-ctx{% endif %}
+                  {{- ' is-today' if c.is_today }}{{ ' is-future' if c.is_future }}"
+           title="{{ c.date }}{{ ' — session completed' if c.accent }}">{{ c.day_number }}</div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{% if volume_chart %}
+<div class="section-label sp-top">total volume · kg</div>
+<div class="card chart-card">
+  <div class="header-row">
+    <div class="mono volume-latest">{{ latest_volume }}<span class="volume-unit"> kg</span></div>
+    {% if volume_is_pr %}<span class="chip chip-progress mono">volume PR</span>{% endif %}
+  </div>
+  {% with chart = volume_chart %}{% include "_chart.html" %}{% endwith %}
+  {# same legend wording as Exercise Detail's chart — the section label above
+     already says what's being measured #}
+  <div class="mono muted chart-legend">● PR · dashed = deload</div>
+</div>
+{% endif %}
+
+<div class="section-label sp-top">progression</div>
+<div class="stat-grid">
+  <div class="card stat-tile">
+    <div class="mono stat-value{{ ' accent-text-green' if ready }}">{{ ready }}</div>
+    <div class="mono muted stat-label">ready to progress</div>
+  </div>
+  <div class="card stat-tile">
+    <div class="mono stat-value{{ ' accent-text-teal' if stalled }}">{{ stalled }}</div>
+    <div class="mono muted stat-label">stalled</div>
+  </div>
+  <div class="card stat-tile">
+    <div class="mono stat-value">{{ completed_weeks }}</div>
+    <div class="mono muted stat-label">weeks done</div>
+  </div>
+  <div class="card stat-tile">
+    <div class="mono stat-value{{ ' accent-text-teal' if deload }}">{{ 'now' if deload else weeks_to_deload }}</div>
+    <div class="mono muted stat-label">{{ 'deload week' if deload else 'weeks to deload' }}</div>
   </div>
 </div>
 

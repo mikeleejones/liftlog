@@ -719,14 +719,50 @@ button.done-set:active { border-color: var(--muted); }
 .chart-label { fill: var(--muted); font-family: var(--font-mono); font-size: 11px; }
 .chart-legend { font-size: 11px; margin-top: 4px; }
 
-/* progress + exercise detail */
-.progress-stats {
+/* home v2 (item 21) — completion calendar, stat tiles, volume headline.
+   The old .progress-stats text row these replace is gone; nothing else used it. */
+
+/* completion calendar: a weekday header over one row of day cells per week.
+   A completed day is filled with its routine's day accent (--accent, set by
+   accent-*-ctx) so the grid speaks the same colour language as the routine
+   cards; everything else is an empty --card cell. */
+.cal { display: flex; flex-direction: column; gap: 6px; }
+.cal-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-day { font-size: 11px; text-align: center; }
+.cal-cell {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 24px;
-  font-size: 14px;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
 }
-.progress-stats .muted { margin-right: 6px; }
+.cal-cell.is-done {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+/* days that haven't happened yet read as absent, not as missed sessions */
+.cal-cell.is-future { opacity: 0.4; }
+/* today is outlined rather than filled, so it never reads as "completed" */
+.cal-cell.is-today { border-color: var(--text); color: var(--text); }
+.cal-cell.is-today.is-done { border-color: var(--text); color: #fff; }
+
+/* the session's headline tonnage, sitting above its own chart */
+.volume-latest { font-size: 24px; font-weight: 500; }
+.volume-unit { font-size: 13px; color: var(--muted); }
+
+/* four stat tiles: the number is the point, the label explains it */
+.stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.stat-tile { margin-top: 0; text-align: center; }
+.stat-value { font-size: 26px; font-weight: 500; line-height: 1.1; }
+.stat-label { font-size: 11px; margin-top: 4px; }
+
+/* progress + exercise detail */
 .lift-row { text-decoration: none; color: var(--text); }
 .lift-name { font-size: 16px; }
 .history-row { margin-top: 8px; }
