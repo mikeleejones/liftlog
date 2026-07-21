@@ -142,6 +142,17 @@ Summary), and cleanly UNMOUNTED — not CSS-hidden — during Active Workout and
 login so those screens keep full-screen focus. The shell reserves 120px bottom
 padding so content can scroll clear of the floating pill.
 
+**Minimized-session bar** (item 20): a mini-player strip pinned directly above
+the tab pill, using the SAME glass recipe (rgba(255,255,255,0.75), 20px blur
+with the -webkit- prefix, the same border/shadow, the same width and centering)
+so the pair reads as one floating unit rather than two competing elements.
+26px radius, 52px min height, a 3px day-accent left edge carried over from the
+routine cards. Content: routine name (ellipsized, never wrapping), then either
+the live rest countdown or elapsed session time in mono, and a "resume" tag in
+--indigo. The whole strip is the tap target. Sits at the tab bar's z-index (5),
+still below the sheet backdrop. Screens showing it get 180px of shell bottom
+padding instead of 120px.
+
 **Sheets** (jump list, substitution picker, edit set): bottom sheets on
 --surface, drag handle, same card idiom inside.
 

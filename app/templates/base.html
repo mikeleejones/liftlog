@@ -16,13 +16,22 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_v }}">
 </head>
-<body>
+<body class="{% if active_tab and mini_workout %}with-minibar{% endif %}">
 <main class="shell {% block shell_class %}{% endblock %}">
 {% block content %}{% endblock %}
 </main>
-{# tab bar renders only when a screen sets active_tab; Active Workout and login
-   omit it entirely (a clean unmount, not CSS-hidden) so they keep full focus. #}
-{% if active_tab %}{% include "_tabbar.html" %}{% endif %}
+{# tab bar renders only when a screen sets active_tab; the FULL Active Workout
+   view and login omit it entirely (a clean unmount, not CSS-hidden) so they keep
+   full focus. A minimized session (item 20) is a tabbed screen like any other,
+   so the bar is present there — with the mini-bar riding above it. #}
+{% if active_tab %}
+  {% if mini_workout %}{% include "_minibar.html" %}{% endif %}
+  {% include "_tabbar.html" %}
+{% endif %}
 {% block scripts %}{% endblock %}
+{% if active_tab and mini_workout %}
+<script src="{{ base }}/static/session.js?v={{ asset_v }}"></script>
+<script src="{{ base }}/static/minibar.js?v={{ asset_v }}"></script>
+{% endif %}
 </body>
 </html>

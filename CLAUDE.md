@@ -71,8 +71,10 @@ A persistent bottom tab bar with four destinations:
   Backing URL `/settings`.
 
 Full-screen (no tab bar): Active Workout and Finish Summary. The tab bar is
-cleanly UNMOUNTED (not just CSS-hidden) during Active Workout so it keeps its
-full-screen focus, and reappears at Finish Summary. Login has no tab bar.
+cleanly UNMOUNTED (not just CSS-hidden) while Active Workout is EXPANDED so it
+keeps its full-screen focus, and reappears at Finish Summary. Active Workout can
+also be MINIMIZED (decision #14), which remounts the tab bar and puts the
+running session in a mini-bar above it. Login has no tab bar.
 Exercise Detail (history + chart, Reset Progress) is reached from the
 Exercises tab and keeps the bar (Exercises active).
 
@@ -121,6 +123,20 @@ Exercises tab and keeps the bar (Exercises active).
     still accepted and upsert routines into the active program's week 1.
     Routines dedupe by name within their program, not globally. Routines
     dropped by a program re-import are archived, never deleted.
+14. Active Workout is minimizable (added 2026-07-21, BACKLOG item 20). This
+    AMENDS the original "full-screen takeover, tab bar unmounted" rule, which
+    now describes the EXPANDED state only. A chevron-down control (not a swipe
+    — the app has no other gesture interactions) collapses the session: the tab
+    bar remounts, the user can browse Home/Workout/Exercises/Profile, and a
+    mini-bar above the tab pill shows the routine name plus the live rest
+    countdown or elapsed time, tapping through to resume exactly where they
+    left off. The session never pauses — it keeps running server-side, and the
+    rest countdown and current exercise position survive in localStorage
+    (presentation state only; every set is already persisted server-side the
+    moment it's logged). The screen wake lock releases on minimize and
+    re-acquires on return, via the existing pagehide/visibilitychange path.
+    This does NOT add background push: leaving the app or browser entirely
+    still means no rest-timer alert, exactly as before.
 
 ## Build plan — work ONE increment at a time, wait for user testing between
 

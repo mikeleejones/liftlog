@@ -62,7 +62,9 @@ const timerBar = document.getElementById("timer-bar");
 const timerFill = document.getElementById("timer-fill");
 const timerCount = document.getElementById("timer-count");
 
-let currentIndex = firstPendingIndex();
+// where the user actually was, if this session was minimized and resumed
+// (item 20); otherwise the first unfinished exercise, as before
+let currentIndex = restoreIndex();
 // pending set values, in display units; edited = stepper was touched
 let pending = null;
 let timer = null;
@@ -84,6 +86,16 @@ function inWarmup(ex) {
 function firstPendingIndex() {
   const i = state.exercises.findIndex((ex) => !exerciseDone(ex));
   return i === -1 ? 0 : i;
+}
+
+function restoreIndex() {
+  const saved = LiftLogSession.read(state.workout_id);
+  const i = saved && saved.exerciseIndex;
+  // any in-range position is honoured, including a finished exercise — "resume
+  // exactly where you left off" means the screen you were actually looking at
+  return Number.isInteger(i) && i >= 0 && i < state.exercises.length
+    ? i
+    : firstPendingIndex();
 }
 
 function toDisplay(kg, unit) {
@@ -362,6 +374,9 @@ function render() {
   }
   html += `</div>`;
   view.innerHTML = html;
+  // every position change lands here, so this is the one place the resume
+  // position needs recording (item 20)
+  LiftLogSession.saveIndex(state.workout_id, currentIndex);
 
   if (!done && !ex.skipped) {
     document.getElementById("log-btn").addEventListener("click", logSet);
@@ -559,19 +574,26 @@ async function toggleUnit() {
 
 async function finishWorkout() {
   const res = await fetch(`${BASE}/workout/${state.workout_id}/finish`, { method: "POST" });
-  if (res.ok) window.location.href = `${BASE}/workout/${state.workout_id}/summary`;
+  if (res.ok) {
+    LiftLogSession.clear(); // no session left to minimize back into
+    window.location.href = `${BASE}/workout/${state.workout_id}/summary`;
+  }
 }
 
 // ---- rest timer ----
 
-function startTimer(seconds) {
+// endsAt lets a rest resume mid-countdown after a minimize/return round trip;
+// omit it to start a fresh `seconds`-long rest from now (item 20)
+function startTimer(seconds, endsAt) {
   stopTimer();
+  endsAt = endsAt || Date.now() + seconds * 1000;
+  // persisted so the mini-bar can keep counting down on other tabs, and so
+  // coming back here picks up mid-rest instead of restarting
+  LiftLogSession.saveRest(state.workout_id, seconds, endsAt);
   timerBar.hidden = false;
   timerBar.classList.remove("done");
-  const startedAt = Date.now();
   const tick = () => {
-    const elapsed = (Date.now() - startedAt) / 1000;
-    const remaining = Math.max(0, seconds - elapsed);
+    const remaining = Math.max(0, (endsAt - Date.now()) / 1000);
     const m = Math.floor(remaining / 60);
     const s = Math.floor(remaining % 60);
     timerCount.textContent = `${m}:${String(s).padStart(2, "0")}`;
@@ -598,6 +620,7 @@ function stopTimer() {
 function hideTimer() {
   stopTimer();
   timerBar.hidden = true;
+  LiftLogSession.clearRest(state.workout_id);
 }
 
 document.getElementById("timer-skip").addEventListener("click", hideTimer);
@@ -828,8 +851,20 @@ function confirmFinish() {
 
 async function discardWorkout() {
   const res = await fetch(`${BASE}/workout/${state.workout_id}/discard`, { method: "POST" });
-  if (res.ok) window.location.href = BASE + "/";
+  if (res.ok) {
+    LiftLogSession.clear();
+    window.location.href = BASE + "/";
+  }
 }
+
+// Minimize (item 20): leaving this page is the collapse. The session keeps
+// running server-side and in localStorage; the mini-bar picks it up on whatever
+// tab you land on. The existing pagehide hook releases the wake lock on the way
+// out, and returning re-acquires it through the same load + first-interaction
+// path — no separate wake-lock handling needed here.
+document.getElementById("minimize-btn").addEventListener("click", () => {
+  window.location.href = BASE + "/";
+});
 
 document.getElementById("finish-btn").addEventListener("click", confirmFinish);
 document.getElementById("finish-anyway-btn").addEventListener("click", finishWorkout);
@@ -885,5 +920,19 @@ window.addEventListener("pagehide", releaseWakeLock);
 );
 
 requestWakeLock();
+
+// A rest that was still running when the session was minimized picks up
+// mid-countdown rather than restarting or vanishing (item 20). Anything already
+// expired is dropped — the 4s "rest done" flash belongs to the moment it ended,
+// not to whenever you happen to come back.
+const savedRest = LiftLogSession.read(state.workout_id);
+if (savedRest && savedRest.restEndsAt && Date.now() < savedRest.restEndsAt) {
+  startTimer(
+    savedRest.restTotal || (savedRest.restEndsAt - Date.now()) / 1000,
+    savedRest.restEndsAt
+  );
+} else if (savedRest && savedRest.restEndsAt) {
+  LiftLogSession.clearRest(state.workout_id);
+}
 
 render();

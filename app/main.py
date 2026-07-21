@@ -48,11 +48,47 @@ def redirect(request: Request, path: str, status_code: int = 303) -> RedirectRes
     return RedirectResponse(base_path(request) + path, status_code=status_code)
 
 
-# makes {{ base }} and {{ asset_v }} available in every template for URL prefixing
-# and static-asset cache-busting
+def _mini_workout(request):
+    """The open session's mini-bar payload, available to EVERY template so a
+    minimized workout stays visible across all four tabs (BACKLOG item 20).
+
+    A context processor rather than something each route passes: the mini-bar is
+    global chrome like the tab bar, and threading it through six handlers is how
+    it ends up missing from the seventh. base.html only renders it on tabbed
+    screens, so Active Workout (which is the full view) and login never show it.
+    Same 12h cutoff as Home's resume card — an abandoned session stops being
+    'in progress' (decision #9)."""
+    if not auth.is_authed(request):
+        return {"mini_workout": None}
+    db = get_db()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    row = db.execute(
+        "SELECT w.id, w.started_at, r.name AS routine_name FROM workout w "
+        "LEFT JOIN routine r ON r.id = w.routine_id "
+        "WHERE w.finished_at IS NULL AND w.started_at >= ? ORDER BY w.started_at DESC LIMIT 1",
+        (cutoff,),
+    ).fetchone()
+    db.close()
+    if row is None:
+        return {"mini_workout": None}
+    name = row["routine_name"] or "ad-hoc session"
+    return {"mini_workout": {
+        "id": row["id"],
+        "started_at": row["started_at"],
+        "routine_name": name,
+        "accent": accent_for(name),
+    }}
+
+
+# makes {{ base }}, {{ asset_v }} and {{ mini_workout }} available in every
+# template for URL prefixing, static-asset cache-busting and the minimized-
+# session bar
 templates = Jinja2Templates(
     directory=APP_DIR / "templates",
-    context_processors=[lambda request: {"base": base_path(request), "asset_v": ASSET_VERSION}],
+    context_processors=[
+        lambda request: {"base": base_path(request), "asset_v": ASSET_VERSION},
+        _mini_workout,
+    ],
 )
 
 init_db()

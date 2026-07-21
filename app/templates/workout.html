@@ -3,7 +3,16 @@
 {% block content %}
 <div id="workout-root" class="workout accent-{{ accent }}-ctx">
   <header class="workout-header accent-border-{{ accent }}">
-    <div>
+    {# minimize (item 20): a chevron-down button rather than a swipe — the app has
+       no gesture interactions anywhere else, so a visible control is the pattern
+       that actually fits. The session keeps running; only the view collapses. #}
+    <button class="btn-quiet minimize-btn" id="minimize-btn" type="button"
+            aria-label="minimize workout">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="workout-title">
       {# session title demoted to the section-label token so the exercise name is
          unmistakably the bigger of the two mid-set (BACKLOG item 19) #}
       <div class="section-label">{{ routine_name }}</div>
@@ -69,6 +78,7 @@
 {% endblock %}
 {% block scripts %}
 <script id="state" type="application/json">{{ state_json | safe }}</script>
+<script src="{{ base }}/static/session.js?v={{ asset_v }}"></script>
 <script src="{{ base }}/static/setedit.js?v={{ asset_v }}"></script>
 <script src="{{ base }}/static/workout.js?v={{ asset_v }}"></script>
 {% endblock %}

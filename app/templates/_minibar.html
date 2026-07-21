@@ -1,0 +1,15 @@
+{# Minimized-session bar (BACKLOG item 20): a mini-player-style strip pinned
+   directly above the floating tab pill, sharing its glass treatment so the two
+   read as one floating unit. Shows the routine name plus either the live rest
+   countdown or elapsed session time, and the whole strip is the tap target back
+   into the full Active Workout view. Rendered on tabbed screens only. #}
+<a class="minibar accent-{{ mini_workout.accent }}-ctx"
+   href="{{ base }}/workout/{{ mini_workout.id }}"
+   data-workout-id="{{ mini_workout.id }}"
+   data-started-at="{{ mini_workout.started_at }}">
+  <div class="minibar-text">
+    <div class="minibar-name">{{ mini_workout.routine_name }}</div>
+    <div class="mono muted minibar-meta" id="minibar-meta">in progress</div>
+  </div>
+  <span class="mono minibar-resume">resume</span>
+</a>

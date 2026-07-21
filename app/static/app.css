@@ -233,6 +233,61 @@ body {
 .tab svg { width: 22px; height: 22px; }
 .tab.is-active { color: var(--indigo); }
 
+/* minimized-session bar (item 20) — a mini-player strip riding directly above
+   the tab pill. Same glass recipe as .tabbar (including the required -webkit-
+   prefix) and the same width/centering, so the two read as one floating unit
+   rather than two competing elements. Sits at the tab bar's z-index, still
+   below the sheet backdrop (10). Its bottom offset is the tab bar's own offset
+   plus the pill's height (58px incl. border) plus an 8px gap. */
+.minibar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + 14px + 58px + 8px);
+  width: calc(100% - 32px);
+  max-width: 460px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 16px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.75);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  color: var(--text);
+  text-decoration: none;
+}
+/* The day accent reads as a left edge, matching the routine cards it came from.
+   accent-border-* can't do it here: its border-left would be overridden by the
+   glass `border` shorthand above, and a square 3px border sits badly inside a
+   26px pill. An inset shadow follows the rounded edge instead, coloured by the
+   --accent that accent-*-ctx sets. */
+.minibar { box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), inset 3px 0 0 var(--accent); }
+.minibar-text { min-width: 0; }
+.minibar-name {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.minibar-meta { font-size: 12px; margin-top: 1px; }
+.minibar.resting .minibar-meta { color: var(--text); }
+.minibar-resume {
+  flex: none;
+  font-size: 12px;
+  color: var(--indigo);
+  letter-spacing: 0.04em;
+}
+/* with the mini-bar present, content needs to clear both floating elements */
+body.with-minibar .shell { padding-bottom: 180px; }
+
 /* exercises search */
 .search-row { display: flex; gap: 8px; margin: 12px 0 4px; }
 .search-input { flex: 1; height: 44px; font-size: 15px; }
@@ -414,6 +469,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -427,6 +483,19 @@ body {
   padding: 16px;
   margin-top: 12px;
 }
+/* the title block flexes; min-width:0 lets a long routine name ellipsize rather
+   than pushing the minimize/list buttons off the header */
+.workout-title { flex: 1; min-width: 0; }
+/* minimize chevron (item 20): square target, same chrome as the other quiet
+   buttons so it reads as tappable per item 3 */
+.minimize-btn {
+  flex: none;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+}
+.minimize-btn svg { width: 20px; height: 20px; }
+
 .exercise-name { font-size: 19px; font-weight: 600; }
 .exercise-cue { color: var(--muted); font-size: 13px; margin-top: 4px; }
 .exercise-target {
