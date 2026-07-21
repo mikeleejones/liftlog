@@ -246,6 +246,31 @@ function setCellText(ex, s) {
   return `${fmt(toDisplay(s.weight_kg, wu))} ${wu} × ${s.reps}`; // weight_reps
 }
 
+// The mid-set "last time" line (item 13). Mirrors the server's _last_text, but
+// re-derived from the canonical kg/metre values on every render so it follows
+// the unit chip instead of being frozen in whatever unit the page loaded with
+// (BACKLOG item 17) — same toDisplay/distToDisplay helpers the stepper uses.
+function lastText(ex) {
+  const sets = ex.last.sets;
+  const t = ex.exercise_type;
+  const wu = weightUnit(ex);
+  const du = distanceUnit(ex);
+  const join = (f) => sets.map(f).join(", ");
+  if (t === "reps_only") return sets.map((s) => s.reps).join(",") + " reps";
+  if (t === "duration") return join((s) => fmtDur(s.duration_seconds));
+  if (t === "distance") return join((s) => `${fmt(distToDisplay(s.distance_m, du))} ${du}`);
+  if (t === "duration_weight")
+    return join((s) => `${fmt(toDisplay(s.weight_kg, wu))}${wu}·${fmtDur(s.duration_seconds)}`);
+  if (t === "distance_weight")
+    return join((s) => `${fmt(distToDisplay(s.distance_m, du))}${du}·${fmt(s.weight_kg)}kg`);
+  if (t === "none") return "";
+  // weight_reps: state the weight once when it was uniform ("60 kg × 10,10,10")
+  const weights = new Set(sets.map((s) => s.weight_kg));
+  if (weights.size === 1)
+    return `${fmt(toDisplay(sets[0].weight_kg, wu))} ${wu} × ${sets.map((s) => s.reps).join(",")}`;
+  return join((s) => `${fmt(toDisplay(s.weight_kg, wu))}×${s.reps}`);
+}
+
 function logLabel(ex) {
   if (inWarmup(ex)) return "LOG WARMUP";
   if (ex.exercise_type === "none") return "MARK DONE";
@@ -312,7 +337,7 @@ function render() {
     // "last time" is always visible mid-set, right by the stepper, no tap/scroll
     // to reveal (BACKLOG item 13). Omitted only when there's no prior session.
     const lastHtml = ex.last
-      ? `<div class="last-line mono"><span class="last-tag">last</span> ${esc(ex.last.text)}</div>`
+      ? `<div class="last-line mono"><span class="last-tag">last</span> ${esc(lastText(ex))}</div>`
       : "";
     html += `
       <div class="current-set">

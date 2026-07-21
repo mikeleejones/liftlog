@@ -160,9 +160,14 @@ def _suggest_single_axis(db, exercise, etype, target_sets, rep_min, rep_max, exc
         s[key] = _as_metric(key, first)
         return s
     v = last[0]
-    if len(set(last)) == 1 and len(sessions[0]["sets"]) >= target_sets and v >= top:
+    # "top of range cleared cleanly" == every working set at or above the top,
+    # mirroring weight_reps' `all(reps >= rep_max)`. It deliberately does NOT
+    # require identical values: 13,12,12 against a top of 12 is a clean clear and
+    # must progress, not repeat (BACKLOG item 16). Step up from the weakest set so
+    # the new target is one the whole session met.
+    if len(last) >= target_sets and all(x >= top for x in last):
         s["kind"] = "progress"
-        s[key] = _as_metric(key, v + inc)
+        s[key] = _as_metric(key, min(last) + inc)
         return s
     if len(sessions) == 3:
         def uniform_at(sess, val):

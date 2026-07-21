@@ -51,7 +51,7 @@
     {% elif l.kind == 'stall' %}<span class="chip chip-stall mono">stalled: try {{ l.suggest }}</span>
     {% endif %}
   </div>
-  <div class="mono muted card-meta">last {{ l.last }} {{ l.unit }} · next {{ l.suggest }} {{ l.unit }}</div>
+  <div class="mono muted card-meta">last {{ l.last }} · next {{ l.next }}</div>
 </a>
 {% endfor %}
 {% endif %}

@@ -4,7 +4,9 @@
 <div id="workout-root" class="workout accent-{{ accent }}-ctx">
   <header class="workout-header accent-border-{{ accent }}">
     <div>
-      <div class="card-title">{{ routine_name }}</div>
+      {# session title demoted to the section-label token so the exercise name is
+         unmistakably the bigger of the two mid-set (BACKLOG item 19) #}
+      <div class="section-label">{{ routine_name }}</div>
       <div class="mono muted card-meta" id="workout-progress"></div>
     </div>
     <button class="btn-quiet mono" id="jump-btn" type="button">list</button>

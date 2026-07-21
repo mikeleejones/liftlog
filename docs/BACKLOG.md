@@ -642,3 +642,196 @@ fixes, the "no exclamation marks, no coach voice" copy rules.
 This touches every screen — treat as its own dedicated build like item 10,
 not something to combine with any other backlog item.
 
+---
+
+## 16. BUG: progression suggestions not reflecting real last-session data
+
+Confirmed via real gym use (screenshot evidence): multiple exercises show
+identical "last" and "next" values — Back Squat 52.16→52.16, Bench Press
+60→60, Barbell Row/Romanian Deadlift/Seated DB Shoulder Press/Hip Thrust
+Machine all the same pattern — and Weighted Pull-Up shows "last 0 kg"
+despite presumably real logged sets. This directly violates the
+already-specified double-progression engine (CLAUDE.md decision #6,
+docs/schema.md's derived-values section: "all working sets at rep_max ->
+suggest +increment next time").
+
+**This is the same root cause as the separately-reported "I want
+progression to be based on progressive overload" observation** — that
+principle is already the intended design (weight_reps: load progression;
+reps_only/duration/distance: rep or time progression per item 5's
+per-type rules). Nothing new to design here — this is a verification and
+bugfix task against an existing, already-correct spec, not a new feature.
+
+**Fix:** audit the progression-suggestion query end to end for a real
+exercise with multiple logged sessions (Bench Press is a good test case
+given the screenshot). Confirm it's actually querying the most recent
+non-deload workout's set_log rows for that exercise, confirm the
+rep_max-hit comparison is evaluated correctly, confirm "next" is the real
+computed suggestion and not silently falling back to "same as last" in a
+way that's been masking a deeper bug. Separately investigate Weighted
+Pull-Up's "last 0 kg" — determine whether 0 is a genuinely correct value
+(e.g. a bodyweight-only exercise not yet loaded) or a query/default
+fallback bug.
+
+**Highest priority in this batch** — an app whose entire value proposition
+is progression suggestions that aren't actually progressing isn't
+functioning as designed.
+
+---
+
+## 17. BUG: "last"/"next" display ignoring exercise display_unit
+
+Per decision #2 (kg canonical storage, per-exercise display_unit, unit
+chip toggle — "suggestions round to loadable increments in the display
+unit"), any exercise configured for lbs display should show last/next in
+lbs, converted and rounded from the canonical kg value. Currently it
+always shows raw kg regardless of the exercise's configured unit.
+
+**Fix:** the last/next display must use the same
+convert-and-round-to-display-unit logic already built for the stepper and
+unit chip (decision #2) — very likely this is a case of that conversion
+helper existing but not being applied to this specific display element.
+While fixing, audit other places that might have the same oversight
+(Exercise Detail history/chart axis labels, Finish Summary volume totals)
+rather than assuming this is the only spot.
+
+---
+
+## 18. Edit previously logged sets
+
+New capability — no way currently to correct a mistake (wrong reps
+typo'd, weight miscounted) after a set is logged, short of finishing or
+abandoning the workout.
+
+**Scope:**
+- From Active Workout: tapping an already-completed set (via the jump
+  sheet or an inline completed-sets list) opens it for editing using the
+  same stepper UI as live logging, pre-filled with current values. Save
+  updates the existing set_log row in place — never creates a duplicate.
+- From Exercise Detail's history view: same editing capability for a set
+  from a past, already-finished workout (correcting something noticed
+  later, not just mid-session).
+- `was_suggested` gets set to `false` on any post-hoc edit, even if it was
+  originally a one-tap "did as suggested" accept — a manual correction
+  means it's no longer an unmodified suggestion acceptance, and the
+  honesty-audit field (decision #10) should reflect that accurately.
+- Editing a past set does NOT retroactively recompute a suggestion already
+  shown for a later exercise in the same or a subsequent session — it only
+  affects historical data and future suggestion calculations going
+  forward.
+
+---
+
+## 19. Visual hierarchy: session title vs. exercise title on Active Workout
+
+Currently the routine/session title (e.g. "Mon - Hinge + Horizontal") and
+the current exercise's name render with visually indistinguishable
+weight/size — real confusion mid-set about which is which, per direct gym
+feedback.
+
+**Fix:** apply the existing section-label style (11px, 700,
+letter-spacing 0.12em, uppercase, --muted — already defined in
+design-language.md) to the session/routine title specifically, keeping the
+exercise name in its current larger/bold treatment. Uses an existing
+token, not a new one — straightforward hierarchy fix.
+
+---
+
+## 20. Minimize an active workout to navigate the rest of the app
+
+This reverses part of the original design (CLAUDE.md: "Active Workout...
+full-screen takeover... tab bar unmounted," reinforced in item 10's
+migration map) — a deliberate architectural change based on real use, not
+a bug. **Update CLAUDE.md's decision log explicitly** rather than letting
+this drift silently out of sync with the code.
+
+**New behavior:** a minimize affordance on Active Workout (a chevron-down
+control or swipe-down gesture — standard mobile pattern) collapses the
+full-screen session into a persistent compact bar, the tab bar remounts,
+and the user can navigate Home/Exercises/Profile freely. The session keeps
+running in the background exactly as-is — elapsed time, rest timer state,
+current exercise/set position — nothing pauses, only the UI presentation
+changes.
+
+**The persistent mini-bar shows at minimum:** routine name, elapsed time
+or current rest countdown if a timer's running, and a tap target that
+returns to the full Active Workout view instantly, resuming exactly where
+you left off.
+
+**Placement (proposal, not locked — confirm before building):** pinned
+directly above the floating tab bar pill, consistent with the mini-player
+pattern from music apps.
+
+**Wake lock interaction:** release the screen wake lock while minimized
+(no reason to force the screen on while browsing other tabs), re-acquire
+using the same visibility-based pattern already built when returning to
+the full Active Workout view.
+
+**Does not change the existing rest-timer background-alert limitation** —
+minimizing to browse LiftLog's own tabs keeps the timer visibly running in
+the mini-bar; leaving the app/browser entirely still has the same
+no-true-background-push gap discussed previously.
+
+---
+
+## 21. Home tab v2: total volume progression + workout-completion calendar
+
+Extends item 10's Home redesign (which folded in the old Progress screen's
+content but didn't yet specify rich visualization) with two concrete new
+components. Direct user framing worth taking seriously: "I currently don't
+use any of it" — treat this as a signal the current dashboard isn't
+earning its place, not just an invitation to bolt more widgets onto it
+unchanged.
+
+**(a) Total volume progression chart** — an aggregate line chart of total
+volume (sum across all weight_reps sets) per completed workout over time.
+Extends the existing single-exercise chart pattern (single-series line,
+PR-dot treatment) from Exercise Detail to a whole-program view — same
+component/tokens, different data aggregation.
+
+**(b) Workout-completion calendar** — a simple weekly/multi-week grid
+showing which days had a completed workout (current week plus at least
+the previous 1-2 weeks), in the spirit of a simple dot-per-day or
+heatmap-style grid. New component — add a spec to docs/design-language.md
+(grid of day cells, filled with the relevant day-accent color for
+completed days, muted/empty for non-workout days).
+
+**Recommend also revisiting** the existing folded-in Progress content
+(weeks-until-deload text, stalled-lift list) alongside adding these
+charts, rather than leaving it as-is with new visuals bolted on top — the
+whole point is a Home tab worth actually using.
+
+---
+
+## 22. Icon redesign v2 (supersedes the earlier minimal-glyph brief)
+
+The simple single-color barbell/dumbbell glyph brief from the previous
+session is superseded by this more specific direction: apply real graphic
+design principles, make it clearly exercise-oriented, move past "too
+basic."
+
+**Design brief:**
+- **Silhouette clarity at small size** — must read as a recognizable shape
+  at 40x40px (actual home-screen size) with zero detail lost. Test by
+  shrinking to that size, not just designing large and assuming it scales.
+- **One dominant shape**, strong figure-ground relationship — a barbell, a
+  stylized flexed-arm silhouette, or (worth real consideration) an
+  ascending-bar/upward-arrow progression motif that ties directly into the
+  app's own identity, since the green "↑ 62.5" progression chip is already
+  design-language.md's stated signature element. An icon that echoes that
+  idea would have real brand cohesion, not just be a generic gym glyph.
+- **Follow iOS icon grid conventions** — appropriate safe-area padding so
+  the glyph doesn't touch the rounded-corner mask edge; avoid a full-bleed
+  literal photo/illustration.
+- **Color:** solid fill using a v2 accent (--indigo or --blue), or a
+  restrained two-tone treatment. Avoid gradients or decorative flourishes
+  that fight the app's clean/minimal personality (item 15).
+- Avoid a generic stock-icon look — genuine shape confidence over literal
+  clipart, even if the underlying subject (a barbell) is a familiar one.
+
+**Process:** propose 2-3 concept directions as SVG previews before
+committing to one — this is a real design decision worth seeing options
+for, not a single unreviewed guess. Regenerate all required sizes
+(apple-touch-icon.png 180x180, any other manifest sizes) as real
+rasterized PNGs once a direction is chosen.
+

@@ -217,8 +217,43 @@ def last_session_summary(db, exercise, exclude_workout_id):
     ).fetchall()
     if not sets:
         return None
+    # 'sets' carries the raw canonical metrics alongside the pre-formatted text:
+    # Active Workout re-derives the line client-side so it follows the unit chip
+    # (BACKLOG item 17), while server-rendered screens use 'text' directly.
     return {"text": _last_text(exercise["exercise_type"], sets, exercise["display_unit"]),
+            "sets": [{k: r[k] for k in ("weight_kg", "reps", "duration_seconds", "distance_m")}
+                     for r in sets],
             "date": row["started_at"][:10]}
+
+
+def _suggest_text(exercise_type: str, s, unit: str) -> str:
+    """The computed suggestion as one line in display units, mirroring
+    _last_text's shape so Home's 'last … · next …' pair reads on the same axes.
+    Double progression advances the REP target on most sessions and the load only
+    when the top of the range was cleared, so weight_reps must state both axes —
+    a weight-only 'next' looks identical to 'last' whenever reps are what moved,
+    which is what made the engine look stuck (BACKLOG item 16)."""
+    w, reps = s["weight_kg"], s["reps"]
+    secs, dist = s["duration_seconds"], s["distance_m"]
+    if exercise_type == "weight_reps":
+        if w is None or reps is None:
+            return "—"
+        return f"{fmt_weight(w, unit)} {unit} × {int(reps)}"
+    if exercise_type == "reps_only":
+        return f"{int(reps)} reps" if reps is not None else "—"
+    if exercise_type == "duration":
+        return fmt_duration(secs) if secs is not None else "—"
+    if exercise_type == "distance":
+        return f"{fmt_distance(dist, unit)} {unit}" if dist is not None else "—"
+    if exercise_type == "duration_weight":
+        if w is None or secs is None:
+            return "—"
+        return f"{fmt_weight(w, unit)}{unit}·{fmt_duration(secs)}"
+    if exercise_type == "distance_weight":
+        if w is None or dist is None:
+            return "—"
+        return f"{fmt_distance(dist, unit)}{unit}·{fmt_weight(w, 'kg')}kg"
+    return "—"  # none: a completion record has nothing to suggest
 
 
 def parse_ts(ts: str) -> datetime:
@@ -302,19 +337,16 @@ def _program_overview(db, active, program_week):
             unit = re["display_unit"]
             primary = PRIMARY_METRIC[etype]
             s = progression.suggest(db, re, re["target_sets"], re["rep_min"], re["rep_max"])
-            last = db.execute(
-                "SELECT s.weight_kg, s.reps, s.duration_seconds, s.distance_m "
-                "FROM set_log s JOIN workout w ON w.id = s.workout_id "
-                "WHERE s.exercise_id = ? AND s.set_type = 'normal' AND w.is_deload = 0 "
-                "ORDER BY w.started_at DESC, s.id DESC LIMIT 1",
-                (re["id"],),
-            ).fetchone()
-            last_val = last[primary] if (last and primary) else None
+            # the whole last session, not its final set: a weight-only "last" hid
+            # both the rep count and mixed-weight sessions, which is what made
+            # "last 115 · next 115" look like a broken engine (BACKLOG item 16).
+            last = last_session_summary(db, re, None)
             lifts.append({
                 "id": re["id"],
                 "name": re["name"],
-                "unit": metric_label(etype, unit),
-                "last": fmt_primary(etype, last_val, unit) if last else "—",
+                "last": last["text"] if last else "—",
+                "next": _suggest_text(etype, s, unit),
+                # compact primary-metric value for the progress/stall chip only
                 "suggest": fmt_primary(etype, s[primary], unit) if primary else "—",
                 "kind": s["kind"],
             })
