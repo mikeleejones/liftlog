@@ -12,8 +12,6 @@
   --indigo:  #6C63FF;  /* Home routine + charts/analysis contexts */
   --red:     #FF3B30;  /* destructive only (delete, abandon session) */
 
-  --tabbar:  #1C1C1E;  /* bottom tab bar — the one dark anchor element */
-
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
@@ -189,22 +187,32 @@ body {
 }
 .nav-links a:active { border-color: var(--muted); }
 
-/* bottom tab bar — four equal-width tabs, icon + label. The one dark anchor
-   element (--tabbar) on the otherwise-light UI; its own darkness separates it
-   from content so it needs no top hairline. Active tab uses --indigo (the
-   home/analysis accent — no fifth color). Fixed to the viewport; the shell's
-   120px bottom padding clears it. Rendered only on Home/Workout/Exercises/
-   Profile (+ Finish Summary); unmounted during Active Workout and login. */
+/* bottom tab bar — a floating glassmorphic pill (Hevy-style), four equal-width
+   tabs, icon + label. NOT edge-to-edge: it floats ~16px in from both edges and
+   clear of the home indicator, as a translucent frosted-glass capsule over the
+   scrolling content. Active tab = --indigo (icon + label color only, no pill-
+   behind-icon highlight); inactive = --muted. z-index sits BELOW the sheet
+   backdrop (10) so an open bottom sheet covers it. The shell's 120px bottom
+   padding lets content scroll clear. Rendered only on Home/Workout/Exercises/
+   Profile (+ Finish Summary); unmounted during Active Workout and login.
+   backdrop-filter needs BOTH the -webkit- prefix (iOS Safari/PWA) and the
+   unprefixed property — do not drop either. */
 .tabbar {
   position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 40;
-  background: var(--tabbar);
-  padding-bottom: env(safe-area-inset-bottom);
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + 14px);
+  width: calc(100% - 32px);
+  max-width: 460px;
+  z-index: 5;
+  border-radius: 30px;
+  background: rgba(255, 255, 255, 0.75);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 }
 .tabbar-inner {
-  max-width: 560px;
-  margin: 0 auto;
   display: flex;
 }
 .tab {
@@ -214,16 +222,16 @@ body {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-height: 54px;
-  padding: 7px 0 6px;
-  color: #AEAEB2;  /* light grey — legible on the dark bar */
+  min-height: 56px;
+  padding: 8px 0;
+  color: var(--muted);
   text-decoration: none;
   font-family: var(--font-ui);
   font-size: 11px;
   letter-spacing: 0.04em;
 }
 .tab svg { width: 22px; height: 22px; }
-.tab.is-active { color: #A79FFF; }  /* lightened --indigo for contrast on dark */
+.tab.is-active { color: var(--indigo); }
 
 /* exercises search */
 .search-row { display: flex; gap: 8px; margin: 12px 0 4px; }

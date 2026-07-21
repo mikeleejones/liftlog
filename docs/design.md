@@ -4,9 +4,8 @@
 back-routine reference page) is **deprecated** as of BACKLOG item 15. This
 document now describes **v2 (light)**: clean and minimal, lots of white space,
 restrained color, confident rather than decorative. Hevy is the structural
-reference (white surfaces, card-based lists, a single dark anchor at the
-bottom, generous whitespace) but with LiftLog's own palette. One dark element
-remains — the bottom tab bar.
+reference (white surfaces, card-based lists, a floating glass nav pill,
+generous whitespace) but with LiftLog's own palette.
 
 ---
 
@@ -26,8 +25,6 @@ remains — the bottom tab bar.
   --green:   #34C759;  /* Friday + success (progression earned, set done) */
   --indigo:  #6C63FF;  /* Home routine + charts/analysis contexts */
   --red:     #FF3B30;  /* destructive only (delete, abandon session) */
-
-  --tabbar:  #1C1C1E;  /* bottom tab bar — the one dark anchor element */
 }
 ```
 
@@ -110,19 +107,40 @@ read on white), and the "rest done" countdown turns --text rather than green
 the fill line and the end flash. Timer end: green flash + vibration (where
 supported).
 
-**Bottom tab bar** (item 10): the app's primary navigation — four
-equal-width tabs (Home, Workout, Exercises, Profile), each an icon above an
-Inter lowercase label. Fixed to the bottom of the viewport on **--tabbar**
-(#1C1C1E — the one dark anchor element; its own darkness separates it from the
-light content, so no top hairline is needed). Inner content capped at the
-560px column and centered so it doesn't stretch on desktop. Inactive tabs are
-a light grey (#AEAEB2, legible on the dark bar); the active tab uses --indigo
-(the home/analysis accent), lightened to #A79FFF for contrast on the dark bar
-— do NOT introduce a fifth color. Respects the safe-area inset at the bottom.
+**Bottom tab bar** — a **floating glassmorphic pill** (Hevy-style; this is the
+settled v2 spec, it has drifted a few times — do not revert it to a docked or
+dark bar). Four equal-width tabs (Home, Workout, Exercises, Profile), each an
+icon above an Inter lowercase label. Exact spec:
+
+- **Position:** `position: fixed`, floating — NOT full-width/edge-to-edge.
+  Horizontal: ~16px clear of both screen edges (`left: 50%; transform:
+  translateX(-50%); width: calc(100% - 32px); max-width: 460px` — so it keeps
+  16px gutters on a phone and caps its width on desktop). Bottom:
+  `calc(env(safe-area-inset-bottom) + 14px)` so it floats clear of the home
+  indicator.
+- **Shape:** fully-rounded capsule, `border-radius: 30px` (reads as a pill at
+  the ~56px bar height).
+- **Background / glass:** `background: rgba(255,255,255,0.75)` with BOTH
+  `-webkit-backdrop-filter: blur(20px)` AND `backdrop-filter: blur(20px)`. The
+  `-webkit-` prefix is REQUIRED for the blur to render on iOS Safari/PWA — never
+  drop it. Content scrolls under the pill and shows through the frost.
+- **Border:** subtle `1px solid rgba(255,255,255,0.4)` for a glass edge/
+  definition against busy content behind the blur.
+- **Shadow:** soft floating lift `0 4px 24px rgba(0,0,0,0.08)` — gentle, not a
+  hard drop shadow; this also carries edge-definition against the light bg.
+- **Active tab:** icon + label in --indigo (the home/analysis accent). Inactive
+  tabs: --muted. Color ALONE signals active — no background fill, no pill-behind-
+  the-icon highlight. Do NOT introduce a fifth color. (The tabs are global nav,
+  not day-specific, so the single home/analysis accent is "the relevant day
+  accent" here — not a per-tab rainbow.)
+- **Stacking:** `z-index: 5` — above scrolling content but BELOW the sheet
+  backdrop (10) / sheet (11), so an open bottom sheet cleanly covers the pill
+  instead of the pill floating on top of it.
+
 It is present on Home/Workout/Exercises/Profile (and Exercise Detail, Finish
 Summary), and cleanly UNMOUNTED — not CSS-hidden — during Active Workout and
-login so those screens keep full-screen focus. The shell already reserves
-bottom padding to clear it.
+login so those screens keep full-screen focus. The shell reserves 120px bottom
+padding so content can scroll clear of the floating pill.
 
 **Sheets** (jump list, substitution picker): bottom sheets on --surface,
 drag handle, same card idiom inside.
