@@ -142,8 +142,21 @@ Summary), and cleanly UNMOUNTED — not CSS-hidden — during Active Workout and
 login so those screens keep full-screen focus. The shell reserves 120px bottom
 padding so content can scroll clear of the floating pill.
 
-**Sheets** (jump list, substitution picker): bottom sheets on --surface,
-drag handle, same card idiom inside.
+**Sheets** (jump list, substitution picker, edit set): bottom sheets on
+--surface, drag handle, same card idiom inside.
+
+**Edit-set sheet** (item 18): the one component shared verbatim between Active
+Workout and Exercise Detail, so correcting a set feels the same wherever it's
+reached. Standard sheet chrome, then the same big-value line and stepper pair
+as live logging — pre-filled from what was STORED, never from a suggestion, so
+opening and saving without touching a stepper is always a no-op. No unit chip:
+an edit shows the exercise's configured display unit and doesn't change it.
+The primary button takes the calling context's accent (the day accent in a
+session, --indigo from Exercise Detail) — .btn-primary carries no fill of its
+own. Entry points are bordered+filled per the item 3 rule: the completed-set
+row on Active Workout becomes a button with a muted "edit" tag in the trailing
+slot (everything in that list is already done, so the status word would be
+noise), and each past set in Exercise Detail history is its own chip.
 
 **Charts** (Progress screens): single-series line on --indigo, 2.5px stroke
 (bumped from v1's 2px so a saturated line still reads on white),

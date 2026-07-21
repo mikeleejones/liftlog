@@ -450,6 +450,18 @@ body {
   margin-top: 6px;
 }
 .done-set .check { color: var(--green); }
+/* a completed set is a button when its type has something to correct (item 18);
+   .done-set already carries the border + fill item 3 requires of anything
+   tappable, so it only needs the button element's own styling neutralised */
+button.done-set {
+  width: 100%;
+  align-items: center;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+button.done-set:active { border-color: var(--muted); }
+.done-set .edit-tag { font-family: var(--font-ui); font-size: 12px; color: var(--muted); }
 
 .current-set { margin-top: 16px; }
 .current-set-label { margin-bottom: 8px; }
@@ -649,4 +661,29 @@ body {
 .lift-row { text-decoration: none; color: var(--text); }
 .lift-name { font-size: 16px; }
 .history-row { margin-top: 8px; }
+/* per-set cells in Exercise Detail history: each is its own tap target so a set
+   from a past workout can be corrected (item 18). Bordered + filled per item 3;
+   the static variant (a 'none'-type set, nothing to edit) drops the chrome so it
+   doesn't read as tappable. */
+.history-sets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.set-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+.set-chip:active { border-color: var(--muted); }
+.set-chip.is-static {
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+  padding-left: 0;
+  cursor: default;
+}
 .audit-note { margin-top: 4px; color: var(--teal); }

@@ -39,7 +39,16 @@
       {%- if h.is_pr %}<span class="chip chip-progress">PR {{ h.top }}</span>
       {%- else %}<span class="muted">top</span> {{ h.top }} {{ unit }}{% endif %}</div>
   </div>
-  <div class="mono muted card-meta">{{ h.sets_text }}</div>
+  <div class="history-sets">
+    {% for s in h.sets %}
+    {% if editable %}
+    <button class="set-chip mono" type="button" data-set='{{ s | tojson }}'
+            data-label="set {{ loop.index }} · {{ h.date }}">{{ s.text }}</button>
+    {% else %}
+    <span class="set-chip mono is-static">{{ s.text }}</span>
+    {% endif %}
+    {% endfor %}
+  </div>
 </div>
 {% endfor %}
 {% endif %}
@@ -56,6 +65,22 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ base }}/static/setedit.js?v={{ asset_v }}"></script>
+<script id="edit-context" type="application/json">{{ edit_context | safe }}</script>
+<script>
+(() => {
+  const ctx = JSON.parse(document.getElementById("edit-context").textContent);
+  document.querySelectorAll(".set-chip[data-set]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const s = JSON.parse(btn.dataset.set);
+      // reload rather than patching the DOM: the session's top value, the PR
+      // marks and the whole chart all derive from these numbers server-side, and
+      // recomputing them here would be a second, drift-prone copy of that logic
+      SetEdit.open(ctx, s.id, s, btn.dataset.label, () => location.reload());
+    });
+  });
+})();
+</script>
 <script>
 (() => {
   const backdrop = document.getElementById("reset-backdrop");

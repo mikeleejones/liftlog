@@ -69,5 +69,6 @@
 {% endblock %}
 {% block scripts %}
 <script id="state" type="application/json">{{ state_json | safe }}</script>
+<script src="{{ base }}/static/setedit.js?v={{ asset_v }}"></script>
 <script src="{{ base }}/static/workout.js?v={{ asset_v }}"></script>
 {% endblock %}

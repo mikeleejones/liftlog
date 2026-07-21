@@ -312,13 +312,18 @@ function render() {
       </div>
       <div class="done-sets">
         ${ex.sets
-          .map(
-            (s) => `<div class="done-set">
-              <span>set ${s.set_number}</span>
-              <span>${setCellText(ex, s)}</span>
-              <span class="check">done</span>
-            </div>`
-          )
+          .map((s) => {
+            const cells = `<span>set ${s.set_number}</span>
+              <span>${setCellText(ex, s)}</span>`;
+            // every row here is by definition done, so the trailing slot carries
+            // the action instead: tap to correct what was logged (item 18)
+            // no id (or nothing to edit) degrades to a plain done row rather
+            // than an inert button
+            return TYPE_AXES[ex.exercise_type].length && s.id
+              ? `<button class="done-set" data-edit-set="${s.id}" type="button">
+                   ${cells}<span class="edit-tag">edit</span></button>`
+              : `<div class="done-set">${cells}<span class="check">done</span></div>`;
+          })
           .join("")}
       </div>`;
 
@@ -371,11 +376,41 @@ function render() {
         render();
       });
   }
+  // completed sets stay editable whether or not the exercise is finished, so
+  // this binds outside the "still logging" branch above
+  view.querySelectorAll("[data-edit-set]").forEach((btn) =>
+    btn.addEventListener("click", () => openSetEdit(ex, Number(btn.dataset.editSet)))
+  );
   const swapBtn = document.getElementById("swap-btn");
   if (swapBtn) swapBtn.addEventListener("click", openSubSheet);
   const finishInline = document.getElementById("finish-inline");
   if (finishInline) finishInline.addEventListener("click", finishWorkout);
   renderJumpList();
+}
+
+// Correct an already-logged set from the completed-sets list (BACKLOG item 18).
+// This never re-derives the session's suggestion: the ↑ chip and the next set's
+// pre-fill both come from state.exercises[i].suggest_*, computed server-side at
+// page load, and nothing here writes to them — so a correction can't retroize a
+// number already on screen. It only patches the stored set locally to match what
+// the server now holds.
+function openSetEdit(ex, setId) {
+  const s = ex.sets.find((x) => x.id === setId);
+  if (!s) return;
+  SetEdit.open(
+    { base: BASE, exercise_type: ex.exercise_type, display_unit: ex.display_unit,
+      accent: state.accent },
+    setId,
+    s,
+    `set ${s.set_number}`,
+    (saved) => {
+      s.weight_kg = saved.weight_kg;
+      s.reps = saved.reps;
+      s.duration_seconds = saved.duration_seconds;
+      s.distance_m = saved.distance_m;
+      render();
+    }
+  );
 }
 
 // ---- steppers with long-press auto-repeat ----
@@ -453,8 +488,9 @@ async function logSet() {
 
   const btn = document.getElementById("log-btn");
   btn.disabled = true;
+  let saved;
   try {
-    await api(`/api/workout/${state.workout_id}/set`, {
+    saved = await api(`/api/workout/${state.workout_id}/set`, {
       exercise_id: ex.exercise_id,
       set_number: setNumber,
       set_type: warmup ? "warmup" : "normal",
@@ -470,7 +506,9 @@ async function logSet() {
     ex.warmups_logged += 1;
     startTimer(WARMUP_REST_SECONDS);
   } else {
-    ex.sets.push({ set_number: setNumber, ...metrics });
+    // keep the server's row id so the set is editable straight away, not only
+    // after a reload (item 18)
+    ex.sets.push({ id: saved.id, set_number: setNumber, ...metrics });
     // carry what was actually done as the pre-fill for the next set
     ex.suggest_weight_kg = metrics.weight_kg;
     ex.suggest_reps = metrics.reps;

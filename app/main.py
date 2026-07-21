@@ -108,6 +108,20 @@ PRIMARY_METRIC = {
 }
 
 
+# which set_log metric columns each exercise_type populates — the server-side
+# mirror of workout.js's TYPE_AXES. Anything outside a type's axes is stored
+# NULL, so an edit can never populate a column the type doesn't use.
+SET_AXES = {
+    "weight_reps": ("weight_kg", "reps"),
+    "reps_only": ("reps",),
+    "duration": ("duration_seconds",),
+    "duration_weight": ("weight_kg", "duration_seconds"),
+    "distance": ("distance_m",),
+    "distance_weight": ("distance_m", "weight_kg"),
+    "none": (),
+}
+
+
 def metric_label(exercise_type: str, unit: str) -> str:
     """Axis/suffix label for an exercise's primary metric."""
     if exercise_type in ("weight_reps", "duration_weight"):
@@ -716,7 +730,7 @@ def _exercise_history(db, exercise):
     unit = exercise["display_unit"]
     primary = PRIMARY_METRIC[etype]
     rows = db.execute(
-        "SELECT w.id AS wid, w.started_at, w.is_deload, "
+        "SELECT w.id AS wid, w.started_at, w.is_deload, s.id AS sid, "
         "s.weight_kg, s.reps, s.duration_seconds, s.distance_m "
         "FROM set_log s JOIN workout w ON w.id = s.workout_id "
         "WHERE s.exercise_id = ? AND s.set_type = 'normal' "
@@ -747,7 +761,16 @@ def _exercise_history(db, exercise):
             "is_pr": is_pr,
             "top": fmt_primary(etype, top, unit),
             "top_value": primary_chart_value(etype, top, unit) if top is not None else None,
-            "sets_text": " · ".join(set_cell(etype, row, unit)[0] for row in s["sets"]),
+            # one entry per set rather than a joined string: each is individually
+            # tappable to correct it after the fact (BACKLOG item 18)
+            "sets": [{
+                "id": row["sid"],
+                "text": set_cell(etype, row, unit)[0],
+                "weight_kg": row["weight_kg"],
+                "reps": row["reps"],
+                "duration_seconds": row["duration_seconds"],
+                "distance_m": row["distance_m"],
+            } for row in s["sets"]],
         })
     return history
 
@@ -770,13 +793,22 @@ def exercise_detail(request: Request, exercise_id: int):
          "is_deload": h["is_deload"], "label": h["date"][5:]}
         for h in history if h["top_value"] is not None
     ])
+    etype = exercise["exercise_type"]
     return templates.TemplateResponse(request, "exercise_detail.html", {
         "active_tab": "exercises",
         "exercise": exercise,
-        "unit": metric_label(exercise["exercise_type"], unit),
+        "unit": metric_label(etype, unit),
         "history": list(reversed(history)),
         "chart": chart,
         "youtube_query": exercise["youtube_query"],
+        # a 'none'-type set records completion only — nothing to correct
+        "editable": bool(SET_AXES[etype]),
+        "edit_context": json.dumps({
+            "base": base_path(request),
+            "exercise_type": etype,
+            "display_unit": unit,
+            "accent": "indigo",  # Exercise Detail is an analysis context
+        }),
     })
 
 
@@ -1053,8 +1085,10 @@ def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
         # warmup ramps are barbell-weight ramps: only weight_reps primaries get them
         warmups = progression.warmup_ramp(s["weight_kg"], exercise["display_unit"]) \
             if is_primary and etype == "weight_reps" and s["weight_kg"] else []
+    # id travels with each set so a logged set can be tapped and corrected in
+    # place from the completed-sets list (BACKLOG item 18)
     sets = db.execute(
-        "SELECT set_number, weight_kg, reps, duration_seconds, distance_m FROM set_log "
+        "SELECT id, set_number, weight_kg, reps, duration_seconds, distance_m FROM set_log "
         "WHERE workout_id = ? AND exercise_id = ? AND set_type = 'normal' "
         "ORDER BY set_number",
         (workout_id, exercise["id"]),
@@ -1170,7 +1204,7 @@ async def log_set(request: Request, workout_id: int):
 
     # which metric columns are populated is the client's call (driven by
     # exercise_type); any omitted metric is stored NULL — a 'none' set is all-NULL
-    db.execute(
+    cur = db.execute(
         "INSERT INTO set_log (workout_id, exercise_id, set_number, set_type, weight_kg, reps, "
         "duration_seconds, distance_m, was_suggested, logged_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1180,8 +1214,60 @@ async def log_set(request: Request, workout_id: int):
          1 if body.get("was_suggested") else 0, utcnow()),
     )
     db.commit()
+    set_id = cur.lastrowid
     db.close()
-    return {"ok": True}
+    # the new row's id goes back so the client can make the set immediately
+    # editable, without waiting for a page reload to learn it (item 18)
+    return {"ok": True, "id": set_id}
+
+
+@app.post("/api/set/{set_id}")
+async def edit_set(request: Request, set_id: int):
+    """Correct an already-logged set in place (BACKLOG item 18). Only the metric
+    columns move: workout_id, exercise_id, set_number and set_type are never
+    touched, so an edit can't fork into a duplicate row or renumber the slot.
+
+    Deliberately works on FINISHED workouts too — correcting something noticed
+    later is half the point — which is why there's no 'workout not open' guard
+    here, unlike log_set. logged_at also keeps its original value: it's the
+    historical timestamp progress_reset_at filters on, not an edit stamp."""
+    if not auth.is_authed(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = await request.json()
+    db = get_db()
+    row = db.execute(
+        "SELECT s.set_type, e.exercise_type FROM set_log s "
+        "JOIN exercise e ON e.id = s.exercise_id WHERE s.id = ?",
+        (set_id,),
+    ).fetchone()
+    if row is None:
+        db.close()
+        return JSONResponse({"error": "no such set"}, status_code=404)
+    # warmups are always weight+reps whatever the exercise's own type, mirroring
+    # how log_set writes them
+    axes = ("weight_kg", "reps") if row["set_type"] == "warmup" \
+        else SET_AXES[row["exercise_type"]]
+    values = {}
+    for key in ("weight_kg", "reps", "duration_seconds", "distance_m"):
+        v = body.get(key)
+        if key not in axes or v is None:
+            values[key] = None
+        elif key == "reps":
+            values[key] = max(1, int(v))
+        else:
+            values[key] = max(0.0, float(v))
+    # was_suggested always drops to 0: a correction made after the fact is no
+    # longer an unmodified acceptance of the suggestion, so the honesty audit
+    # (decision #10) must stop counting it as one.
+    db.execute(
+        "UPDATE set_log SET weight_kg = ?, reps = ?, duration_seconds = ?, "
+        "distance_m = ?, was_suggested = 0 WHERE id = ?",
+        (values["weight_kg"], values["reps"], values["duration_seconds"],
+         values["distance_m"], set_id),
+    )
+    db.commit()
+    db.close()
+    return {"ok": True, **values}
 
 
 def _swap_program_context(db, workout):
