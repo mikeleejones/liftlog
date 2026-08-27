@@ -1,3 +1,4 @@
 2026-08-27: Discarded the incomplete React/API frontend migration locally and restored the repository to pre-migration commit bd812d3. Staging was separately restored to mirror production's server-rendered deployment.
 2026-08-27: Verified GitHub origin has no published branches. Publishing local main at bd812d3 is blocked because HTTPS GitHub credentials and the GitHub CLI are unavailable on this machine.
 2026-08-27: Installed and authenticated GitHub CLI, configured Git credential helper, and published main at bd812d3 without staging local bookkeeping files.
+2026-08-27: Made AGENTS.md delegate to CLAUDE.md as the single project authority and updated the global setup rule to use that delegation pattern.
