@@ -1,14 +1,15 @@
 # LiftLog
 
-Personal workout tracker. Single user (MLJ). Self-hosted web app on ultra.cc.
+Personal workout tracker. Single user (MLJ). Self-hosted web app on a shared
+OVH VPS (see Server access — originally ultra.cc, moved since).
 This file is the design authority — read it and `docs/` before writing any code.
 When a design decision here conflicts with an implementation idea, this file wins;
 if a change is genuinely warranted, propose amending this file first, then code.
 
 ## Product definition
 
-A personal workout tracker for one user, self-hosted on ultra.cc as a web app
-with a Python backend and SQLite storage, accessed from iPhone (primary, at the
+A personal workout tracker for one user, self-hosted on a shared OVH VPS as a
+web app with a Python backend and SQLite storage, accessed from iPhone (primary, at the
 gym, Chrome) and MacBook (routine imports, progression charts, analysis).
 Routines are designed with Claude in claude.ai and imported as JSON. It tracks
 routines, sets, reps, and weight; runs a rest timer; and suggests progressive
@@ -26,13 +27,24 @@ or per-set RPE. Do not add these.
 
 ## Stack
 
-- Backend: Python 3.11+, FastAPI, SQLite (single file), uvicorn
-- Frontend: server-rendered HTML + vanilla JS + CSS (no framework, no build
-  step). Mobile-first, max content width 560px (760px on chart screens).
-- Auth: one shared secret. Cookie set via a single login field; every route
-  checks it. Secret lives in server config/env, never in the database or repo.
-- Deployment target: ultra.cc custom service behind their nginx reverse proxy.
-  Develop and run locally first; deployment is its own step at the end of v0.1.
+- Backend: Python 3.11+, FastAPI as a JSON API (`/api/*`), SQLAlchemy models +
+  Alembic migrations over SQLite (single file), uvicorn. (Superseded the
+  original Jinja2-templated FastAPI + hand-rolled sqlite3 migrations — see
+  decision #15.)
+- Frontend: React 19 + TypeScript + Vite + Tailwind CSS 4 + shadcn/ui + React
+  Router + TanStack Query, built to `frontend/dist` and served as a static SPA
+  (superseded the original server-rendered Jinja2 + vanilla JS + CSS — see
+  decision #15). Design tokens (color/type/spacing/radius) still come from
+  `docs/design.md` unchanged; the migration is a rendering-technology change,
+  not a design-language change. Mobile-first, max content width 560px (760px
+  on chart screens).
+- Auth: one shared secret. A cookie set via `/api/auth/login`; every API route
+  checks it (SPA fetches are same-origin, credentialed). Secret lives in
+  server config/env, never in the database or repo.
+- Deployment target: a shared OVH VPS (see Server access below) behind Caddy.
+  Caddy serves `frontend/dist` directly and reverse-proxies `/api/*` to the
+  FastAPI process — see `DEPLOY.md`. Develop and run locally first; deploy to
+  `liftlog-staging` before production.
 
 ## Binding specs in docs/
 
@@ -47,6 +59,9 @@ or per-set RPE. Do not add these.
   (primary button, stepper, exercise card, rest timer bar, bottom tab bar,
   sheets, charts), motion rules, and interface copy voice. Every screen derives
   from these tokens; no ad-hoc colors or font sizes.
+- `docs/api.md` — the binding HTTP API contract introduced by v0.6. Every
+  `/api/*` endpoint's request, response, auth, and error behavior must be
+  documented there in the same change as its implementation.
 
 ## Screens — four-tab structure (item 10)
 
@@ -137,6 +152,27 @@ Exercises tab and keeps the bar (Exercises active).
     re-acquires on return, via the existing pagehide/visibilitychange path.
     This does NOT add background push: leaving the app or browser entirely
     still means no rest-timer alert, exactly as before.
+15. Frontend/backend migration to React + FastAPI-JSON-API (added
+    2026-08-27). This AMENDS the original "server-rendered HTML + vanilla JS,
+    no framework, no build step" stack decision and the "no framework
+    migrations" working agreement — both superseded, see the Stack section
+    above. A first migration attempt (commit `6e48cbd`, Aug 2026) was built
+    and then fully discarded (`git reset` to `bd812d3`) because a mid-stream
+    coding-model switch produced a UI that looked worse than the original and
+    had broken functionality — not because the framework approach itself was
+    wrong. This migration is a deliberate retry with explicit gates (see the
+    migration/large-change discipline working agreement) rather than a
+    reversal of the decision to move to React. Scope: FastAPI becomes a pure
+    JSON API (`/api/*`, contract documented in `docs/api.md`); `db.py`'s
+    hand-rolled sqlite3 migrations are replaced with SQLAlchemy models +
+    Alembic (matching the pattern already used by the Rental Radar project on
+    the same server); the frontend becomes a React 19 + Vite + TS + Tailwind +
+    shadcn/ui SPA built to `frontend/dist` and served by Caddy, mirroring
+    Rental Radar's already-proven Caddy block on the same VPS. `docs/design.md`
+    is unchanged and remains the single source of visual truth for the new
+    frontend. The old ultra.cc subpath/root-path deployment support
+    (`LIFTLOG_ROOT_PATH`) is dropped as dead code now that real deployment is
+    per-subdomain Caddy routing on the OVH VPS (see Server access).
 
 ## Build plan — work ONE increment at a time, wait for user testing between
 
@@ -152,7 +188,17 @@ Exercises tab and keeps the bar (Exercises active).
   tracking/banner, substitution picker with 3 alternatives.
 - v0.4 Polish: Progress screens with charts, Exercise Detail history, JSON
   export, timer vibration where supported, PWA manifest for Add to Home
-  Screen, deployment to ultra.cc.
+  Screen, deployment to ultra.cc (later moved to the current OVH VPS — see
+  Server access).
+- v0.5: the 22 items in `docs/BACKLOG.md`, shipped incrementally (four-tab
+  nav, AI substitutions, automation tokens, light-theme v2 redesign, TCX
+  export, minimize/mini-bar, Home v2 charts, and more — see git log for the
+  full list).
+- v0.6 Frontend migration (decision #15, in progress): FastAPI → JSON API +
+  SQLAlchemy/Alembic; server-rendered Jinja2 + vanilla JS → React/Vite SPA.
+  Phased and gated per screen, tested on `liftlog-staging` (and at the gym for
+  Active Workout) before each next phase — same discipline as v0.1-v0.5, just
+  applied to a technology change instead of a feature.
 
 Do not start an increment until the previous one has been used at the gym and
 signed off. Do not build ahead "while you're in there."
@@ -160,7 +206,19 @@ signed off. Do not build ahead "while you're in there."
 ## Working agreements
 
 - Keep the whole app small: this is a personal tool, not a product. Prefer
-  boring code. No framework migrations, no premature abstraction.
+  boring code, no premature abstraction. The one-time exception is the
+  frontend/backend migration in decision #15 — once it lands, that is not an
+  invitation to churn the stack further; treat the new stack (React/Vite/
+  FastAPI-API/SQLAlchemy) as the new "boring" baseline going forward, same as
+  the old one was.
+- Migration/large-change discipline (added with decision #15, applies to any
+  future change of similar size): never switch coding models mid-phase
+  without a written handoff checkpoint in this file or `CHANGES.log` — the
+  first migration attempt was discarded partly because a mid-stream model
+  switch produced inconsistent, regressive output. Every new screen/surface
+  must be checked against `docs/design.md` for visual fidelity and against
+  existing shipped behavior for functional parity before being considered
+  done, not just "compiles and loads."
 - Schema changes require updating docs/schema.md in the same commit.
 - Never commit secrets. .gitignore the SQLite database file and any .env.
 - Routine design/programming questions are NOT Claude Code's job — those go
@@ -172,7 +230,24 @@ signed off. Do not build ahead "while you're in there."
   Home. This keeps screens grouped by purpose so another reorg isn't needed.
 
 ## Server access
-Claude Code has direct SSH access to the ultra.cc deployment via the
-`liftlog-server` alias. Always ask for explicit confirmation before running
-anything destructive on the server (pm2 delete, database migrations, rm on
-liftlog.db) — read-only checks (pm2 status, logs, describe) don't need to ask.
+
+liftlog runs on a shared OVH VPS (alongside other personal projects), not
+ultra.cc — that was the original v0.4 deployment target and has since been
+replaced; this section previously described it incorrectly.
+
+- SSH: `ssh mrradcl` (alias in `~/.ssh/config`; the deployment host is OVH,
+  not ultra.cc).
+- Process manager: pm2. Two processes: `liftlog` (production) and
+  `liftlog-staging`, both under `/home/ubuntu/apps/<name>/`.
+- Reverse proxy: Caddy (`/etc/caddy/Caddyfile`), not nginx. Production is
+  `liftlog.mrradcl.com` (proxies to `localhost:8001` today; becomes
+  `root * frontend/dist` + `handle /api/* { reverse_proxy }` + SPA
+  `try_files` fallback after the frontend migration, matching the
+  `rentalradar.mrradcl.com` block already on that box). Staging is
+  `liftlog-staging.mrradcl.com` → `127.0.0.1:8011`.
+- Deployment is by **rsync**, not git — the server directories are not git
+  repos. See `DEPLOY.md` for the exact commands.
+
+Always ask for explicit confirmation before running anything destructive on
+the server (pm2 delete, database migrations, rm on liftlog.db) — read-only
+checks (pm2 status, logs, describe) don't need to ask.

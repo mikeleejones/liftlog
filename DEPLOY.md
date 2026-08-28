@@ -1,151 +1,160 @@
-# Deploying liftlog to ultra.cc
+# Deploying liftlog
 
-liftlog is a single Python process (uvicorn) behind ultra.cc's nginx reverse
-proxy. Develop and run locally first (see `README.md`); this is the last step
-of v0.4. The app-specific commands below are exact; the steps that happen in
-the ultra.cc panel are described generically — adapt them to your panel.
+liftlog runs on a shared OVH VPS (alias `mrradcl` in `~/.ssh/config`) alongside
+several other personal projects (ReelLog, Rental Radar, etc.), behind **Caddy**
+(not nginx) and managed by **pm2**. This file previously described an ultra.cc
+deployment — that was the original v0.4 target and has since moved; this is
+the corrected version (see `CLAUDE.md`'s Server access section).
 
-## 1. Get the code onto the server
+Deployment is by **rsync**, not git — the server directories
+(`/home/ubuntu/apps/liftlog` and `/home/ubuntu/apps/liftlog-staging`) are
+plain rsync targets, not git checkouts.
 
-SSH in, then clone into your home directory:
+## Environments
 
-```sh
-cd ~
-git clone <your-remote-url> liftlog   # or rsync the working tree up
-cd liftlog
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
+| | Host | Directory | Port | pm2 process |
+|---|---|---|---|---|
+| Production | `liftlog.mrradcl.com` | `/home/ubuntu/apps/liftlog` | 8001 | `liftlog` |
+| Staging | `liftlog-staging.mrradcl.com` | `/home/ubuntu/apps/liftlog-staging` | 8011 | `liftlog-staging` |
 
-## 2. Pick a port and set the secret
+Both are real, already-running environments. **Always deploy to staging
+first**, verify it end-to-end, then promote the same change to production.
 
-ultra.cc assigns each custom app a free port. Reserve one from your panel
-(or `Apps → Port` — whatever your plan exposes). Note it as `PORT` below.
-
-Put the secret and DB path in the process environment, never in the repo:
+## 1. First-time setup (already done, documented for reference)
 
 ```sh
-# ~/liftlog/.env  (already gitignored)
-LIFTLOG_SECRET=<a long random string>
-LIFTLOG_DB=/home/<user>/liftlog/liftlog.db
+ssh mrradcl
+mkdir -p ~/apps/liftlog   # or liftlog-staging
+cd ~/apps/liftlog
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 ```
 
-Use a real random secret, e.g. `openssl rand -hex 24`. The SQLite file lives
-outside the repo tree only if you point `LIFTLOG_DB` elsewhere; the default
-sits next to the code and is gitignored.
+**Current staging exception:** `liftlog-staging` intentionally uses the
+production app directory's interpreter (`/home/ubuntu/apps/liftlog/venv`) with
+its own working directory and SQLite file. Its pm2 process is configured that
+way today, so staging dependency and Alembic commands must use the shared path
+until this is deliberately changed; do not assume `~/apps/liftlog-staging/venv`
+exists.
 
-## 3. Run it under a process manager
-
-Bind to localhost on the assigned port — nginx reaches it, the outside world
-does not:
+`~/apps/<env>/.env` (gitignored, never rsynced) holds:
 
 ```sh
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port <PORT>
+LIFTLOG_SECRET=<a long random string>       # openssl rand -hex 24
+LIFTLOG_DB=/home/ubuntu/apps/<env>/liftlog.db
+LIFTLOG_PORT=<8001 for production, 8011 for staging>
+ANTHROPIC_API_KEY=<key, used by app/ai.py for AI substitution suggestions>
 ```
 
-Keep it alive across reboots. ultra.cc ships **pm2**. The process is defined
-by the version-controlled `ecosystem.config.js` in the repo root rather than an
-ad-hoc shell string, so restart limits are explicit. It reads the port (and the
-optional subpath) from the gitignored `.env`, so add those there first:
+There is currently no subpath/root-path deployment (`LIFTLOG_ROOT_PATH`) —
+each environment gets its own subdomain, so that code path is being removed
+as part of the v0.6 frontend migration (decision #15).
 
-```sh
-# ~/liftlog/.env  (alongside LIFTLOG_SECRET)
-LIFTLOG_PORT=<PORT>
-# LIFTLOG_ROOT_PATH=/liftlog     # ONLY for the subpath layout (see section 4)
-```
+## 2. Run under pm2
 
-Then start it from the config file:
+Defined by the version-controlled `ecosystem.config.js` in the repo root
+(reads `LIFTLOG_PORT` from `.env`):
 
 ```sh
 pm2 start ecosystem.config.js
 pm2 save
-pm2 startup   # follow the printed instruction once (survives a reboot)
 ```
 
-The config enables auto-restart on crash (pm2's default) but bounds it:
-`min_uptime: 10s` + `max_restarts: 10` mean a process that keeps dying within
-10s of start is retried 10 times, then left stopped instead of hammering the
-slot in a crash-loop. `.env` is read by both the config (for the port) and the
-app itself, so pm2 needs no extra env config. If you prefer systemd --user, an
-equivalent unit works the same way.
+`autorestart` is on with `min_uptime: 10s` / `max_restarts: 10`, so a process
+that keeps crashing within 10s of start is retried 10 times then left
+stopped rather than crash-looping forever.
 
-**Cap the logs** so crash output can't fill the slot's disk quota. Install the
-pm2 log-rotate module once (idempotent — safe to re-run):
+## 3. Caddy
 
-```sh
-pm2 install pm2-logrotate
-pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:retain 7
-pm2 set pm2-logrotate:compress true
+Config lives at `/etc/caddy/Caddyfile` on the server (not in this repo).
+**Current state** (pre-migration, FastAPI serves Jinja2-rendered HTML
+directly):
+
+```
+liftlog.mrradcl.com {
+    reverse_proxy localhost:8001
+}
+liftlog-staging.mrradcl.com {
+    reverse_proxy 127.0.0.1:8011
+}
 ```
 
-## 4. Expose it through nginx
+**Target state after the v0.6 frontend migration** (React SPA build served
+directly by Caddy, API calls proxied through) — mirrors the
+`rentalradar.mrradcl.com` block already live on this same VPS:
 
-In the panel, add a reverse-proxy / custom-app entry that forwards a public
-URL to `http://127.0.0.1:<PORT>`. Both layouts are supported:
+```
+liftlog.mrradcl.com {
+    root * /home/ubuntu/apps/liftlog/frontend/dist
+    encode gzip
 
-- **Subdomain** (`https://liftlog.<user>.usbx.me`): nothing extra to do.
-- **Subpath** (`https://<user>.usbx.me/liftlog/`): set `LIFTLOG_ROOT_PATH=/liftlog`
-  in `.env` (the config passes it to uvicorn as `--root-path`), and configure nginx to strip the prefix before
-  forwarding (a `proxy_pass http://127.0.0.1:<PORT>/;` with the trailing
-  slash under `location /liftlog/ { ... }`). The app reads the incoming root
-  path and prefixes every link, redirect, form action, static asset, and JS
-  fetch accordingly, so URLs resolve to paths nginx actually proxies. The
-  auth cookie is scoped to the prefix. The web-app manifest uses relative
-  URLs, so Add-to-Home-Screen works under either layout.
+    handle /api/* {
+        reverse_proxy localhost:8001
+    }
 
-Make sure the proxy passes `X-Forwarded-*` headers and allows the cookie
-through (it's a normal first-party cookie, HttpOnly, SameSite=Lax).
-
-To sanity-check the subpath build locally before redeploying:
-
-```sh
-.venv/bin/uvicorn app.main:app --port 8321 --root-path /liftlog
-# GET / should 303 to /liftlog/login (not /login)
-curl -sI localhost:8321/ | grep -i location
+    handle {
+        try_files {path} /index.html
+        file_server
+    }
+}
 ```
 
-## 5. First load
+(Same pattern for `liftlog-staging.mrradcl.com` → port 8011.) This change
+lands in Phase 6 of the migration, only after the SPA has full functional and
+design parity verified on staging.
 
-Open the URL, enter the secret once (the cookie lasts a year), and confirm
-Home renders. The database and its tables are created automatically on first
-start; any existing `liftlog.db` you copied up is migrated in place.
+After editing the Caddyfile: `sudo caddy reload --config /etc/caddy/Caddyfile`
+(or `systemctl reload caddy`).
 
-## Updating later
+## 4. Deploying an update (current, pre-migration)
 
-Deployment is by **rsync**, not git. From the repo root on your Mac, push the
-working tree up — excluding the live database, the secret, and the local venv so
-they're never overwritten:
+From the repo root on your Mac, rsync the working tree up — excluding the
+live database, secret, and local venv:
 
 ```sh
 rsync -av --delete \
-  --exclude='.venv' --exclude='liftlog.db*' --exclude='.env' --exclude='.git' \
-  ./ <user>@<host>:~/liftlog/
+  --exclude='.venv' --exclude='venv' --exclude='liftlog.db*' \
+  --exclude='.env' --exclude='.git' --exclude='frontend' \
+  ./ mrradcl:~/apps/liftlog-staging/    # staging first
 ```
 
-`--delete` prunes files on the server that no longer exist locally (so removed
-modules like `app/catalog.py` go away too); the excludes keep `liftlog.db`,
-`.env`, and `.venv` intact. Then on the server:
+Then on the server:
 
 ```sh
-ssh <user>@<host>
-cd ~/liftlog
-.venv/bin/pip install -r requirements.txt   # only when requirements changed (e.g. anthropic added in v0.5 item 4)
-pm2 restart liftlog
+ssh mrradcl
+cd ~/apps/liftlog-staging
+/home/ubuntu/apps/liftlog/venv/bin/pip install -r requirements.txt   # shared staging interpreter
+pm2 restart liftlog-staging
 ```
 
-**One-time migration to the config file** (only if liftlog is still running from
-the old inline `pm2 start ".venv/bin/uvicorn ..."` string). Add `LIFTLOG_PORT`
-to `.env` (see section 3), then re-create the process from the config once:
+Verify on `https://liftlog-staging.mrradcl.com`, then repeat the rsync target
+and pm2 process name for production (`~/apps/liftlog`, `pm2 restart liftlog`).
+
+## 5. Deploying after the frontend migration lands (Phase 6+)
+
+Build the frontend locally before rsyncing, then ship the build output
+alongside the Python app:
 
 ```sh
-pm2 delete liftlog
-pm2 start ecosystem.config.js
-pm2 save
+cd frontend && npm run build && cd ..
+rsync -av --delete \
+  --exclude='.venv' --exclude='venv' --exclude='liftlog.db*' \
+  --exclude='.env' --exclude='.git' --exclude='frontend/node_modules' \
+  ./ mrradcl:~/apps/liftlog-staging/
+ssh mrradcl 'cd ~/apps/liftlog-staging && /home/ubuntu/apps/liftlog/venv/bin/pip install -r requirements.txt && pm2 restart liftlog-staging'
 ```
 
-After that, plain `pm2 restart liftlog` picks up the version-controlled
-definition on every deploy.
+No `--exclude='frontend'` this time — `frontend/dist` needs to reach the
+server since Caddy serves it directly (see section 3).
 
-Schema changes migrate on start (see `app/db.py`). Back up first with the
-**EXPORT JSON** button on the Settings screen, or just copy `liftlog.db`.
+## Schema / database
+
+Schema changes migrate via Alembic. Existing databases created before v0.6
+already match baseline `20260827_01`; after deploying Phase 1, mark each once
+with `venv/bin/alembic stamp 20260827_01` (or the shared interpreter path for
+staging; this creates only Alembic's version record, not a schema/data
+migration). Future releases use `venv/bin/alembic upgrade head` after
+rsyncing. New empty databases use `upgrade head` directly. Back up first with
+the **EXPORT JSON** button on Profile, or just copy `liftlog.db`. Never run
+destructive database commands on production without explicit confirmation (see
+`CLAUDE.md`'s Server access section).

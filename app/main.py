@@ -4,10 +4,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from . import ai, auth, charts, exporter, importer, progression
 from .config import SECRET
@@ -338,6 +339,21 @@ def token_or_cookie_authed(request: Request, db) -> bool:
     return True
 
 
+def require_api_auth(request: Request) -> None:
+    """Reject unauthenticated browser API requests with the contract's JSON 401.
+
+    Browser-only API groups use the existing shared-secret cookie. Automation
+    endpoints continue to opt into token_or_cookie_authed explicitly, so an API
+    token cannot accidentally gain access to a browser mutation endpoint.
+    """
+    if not auth.is_authed(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+
+class ApiLoginRequest(BaseModel):
+    secret: str
+
+
 # ---- auth ----
 
 @app.get("/login", response_class=HTMLResponse)
@@ -360,6 +376,37 @@ def login(request: Request, secret: str = Form("")):
         path=base_path(request) or "/",
     )
     return resp
+
+
+@app.post("/api/auth/login")
+def api_login(request: Request, body: ApiLoginRequest):
+    """Create the same long-lived browser session as the HTML login form."""
+    if not auth.secret_matches(body.secret):
+        return JSONResponse({"detail": "Invalid secret"}, status_code=401)
+    response = JSONResponse({"authenticated": True})
+    response.set_cookie(
+        auth.COOKIE_NAME,
+        auth.cookie_value(),
+        max_age=auth.COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path=base_path(request) or "/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout", status_code=204)
+def api_logout(request: Request):
+    """Clear the browser session cookie. Logout is safe when already logged out."""
+    response = Response(status_code=204)
+    response.delete_cookie(auth.COOKIE_NAME, path=base_path(request) or "/")
+    return response
+
+
+@app.get("/api/auth/session")
+def api_session(request: Request):
+    """Return session state without treating an absent cookie as an error."""
+    return {"authenticated": auth.is_authed(request)}
 
 
 # ---- home ----
@@ -547,11 +594,13 @@ def _quick_start_cards(db, active, program_week):
     return cards
 
 
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    if not auth.is_authed(request):
-        return login_redirect(request)
-    db = get_db()
+def _home_context(db):
+    """The shared, primitive-only Home data source for HTML and `/api/home`.
+
+    Week rollover intentionally remains part of a Home read: that is the
+    established app-load behavior, and keeping it here prevents the API from
+    showing a stale program week compared with the server-rendered dashboard.
+    """
     run_week_completion(db)
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
     active = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
@@ -579,14 +628,12 @@ def home(request: Request):
     overview = _program_overview(db, active, state["program_week"])
     volume_points = _volume_history(db)
     calendar = _completion_calendar(db)
-    db.close()
     latest_volume = volume_points[-1]["value"] if volume_points else None
-    return templates.TemplateResponse(request, "home.html", {
-        "active_tab": "home",
+    return {
         "sessions_this_week": sessions_this_week,
         "sessions_required": required,
-        "volume_chart": charts.line_chart(volume_points),
-        "latest_volume": f"{latest_volume:,}" if latest_volume is not None else None,
+        "volume_points": volume_points,
+        "latest_volume": latest_volume,
         "volume_is_pr": bool(volume_points and volume_points[-1]["is_pr"]),
         "calendar": calendar,
         "weeks_to_deload": max(0, 3 - state["weeks_since_deload"]),
@@ -600,7 +647,79 @@ def home(request: Request):
         "in_progress": in_progress,
         "in_progress_accent": accent_for(in_progress["routine_name"] or "") if in_progress else None,
         **overview,
+    }
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    context = _home_context(db)
+    db.close()
+    return templates.TemplateResponse(request, "home.html", {
+        "active_tab": "home",
+        "volume_chart": charts.line_chart(context["volume_points"]),
+        "latest_volume": f"{context['latest_volume']:,}" if context["latest_volume"] is not None else None,
+        **context,
     })
+
+
+@app.get("/api/home")
+def api_home(request: Request):
+    """The authenticated dashboard data source for the React Home screen."""
+    require_api_auth(request)
+    db = get_db()
+    context = _home_context(db)
+    db.close()
+    active = context["program"]
+    in_progress = context["in_progress"]
+    return {
+        "program": (
+            {
+                "id": active["id"],
+                "name": active["name"],
+                "weeks_count": active["weeks_count"],
+                "week": context["program_week"],
+            }
+            if active else None
+        ),
+        "sessions": {
+            "completed": context["sessions_this_week"],
+            "required": context["sessions_required"],
+        },
+        "deload": {
+            "active": context["deload"],
+            "deferred": context["deload_deferred"],
+            "weeks_to_next": context["weeks_to_deload"],
+        },
+        "in_progress": (
+            {
+                "workout_id": in_progress["id"],
+                "started_at": in_progress["started_at"],
+                "routine_name": in_progress["routine_name"] or "ad-hoc session",
+                "accent": context["in_progress_accent"],
+            }
+            if in_progress else None
+        ),
+        "calendar": context["calendar"],
+        "volume": {
+            "points": context["volume_points"],
+            "latest_kg": context["latest_volume"],
+            "latest_is_pr": context["volume_is_pr"],
+        },
+        "progression": {
+            "ready": context["ready"],
+            "stalled": context["stalled"],
+            "completed_weeks": context["completed_weeks"],
+            "weeks_since_deload": context["weeks_since_deload"],
+            "lifts": context["lifts"],
+        },
+        "audit": {
+            "suggested_pct": context["suggested_pct"],
+            "working_sets": context["audit_total"],
+        },
+    }
 
 
 @app.post("/deload/defer")
@@ -671,6 +790,33 @@ def _routines_context(db, imported=0, view="active"):
     }
 
 
+def _routine_list_payload(db, view="active"):
+    """The data behind both routine-list renderers, without HTML-only fields."""
+    run_week_completion(db)
+    context = _routines_context(db, view=view)
+    payload = {
+        "view": context["view"],
+        "programs": [
+            {
+                "id": group["program"]["id"],
+                "name": group["program"]["name"],
+                "weeks_count": group["program"]["weeks_count"],
+                "is_active": bool(group["program"]["is_active"]),
+                "current_week": group["current_week"],
+                "weeks": group["weeks"],
+            }
+            for group in context["groups"]
+        ],
+        "standalone": context["standalone"],
+    }
+    if not context["archived"]:
+        state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
+        active = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()
+        payload["quick_start"] = _quick_start_cards(db, active, state["program_week"])
+        payload["deload_active"] = progression.deload_active(db, utcnow())
+    return payload
+
+
 @app.get("/routines", response_class=HTMLResponse)
 def routines_page(request: Request, imported: int = 0, view: str = "active"):
     if not auth.is_authed(request):
@@ -692,6 +838,18 @@ def routines_page(request: Request, imported: int = 0, view: str = "active"):
     return templates.TemplateResponse(request, "routines.html", context)
 
 
+@app.get("/api/routines")
+def api_routines(request: Request, view: str = "active"):
+    """Active or archived routines grouped exactly as the Workout tab shows."""
+    require_api_auth(request)
+    if view not in {"active", "archived"}:
+        raise HTTPException(status_code=422, detail="view must be 'active' or 'archived'")
+    db = get_db()
+    payload = _routine_list_payload(db, view=view)
+    db.close()
+    return payload
+
+
 def _target_text(exercise_type: str, target_sets, rep_min, rep_max, rest_seconds) -> str:
     """The prescription line for a routine_exercise ('3 × 8–10 · rest 90s'),
     mirroring Active Workout's own target line."""
@@ -699,6 +857,46 @@ def _target_text(exercise_type: str, target_sets, rep_min, rep_max, rest_seconds
         return f"mark done · rest {rest_seconds}s"
     reps = str(rep_min) if rep_min == rep_max else f"{rep_min}–{rep_max}"
     return f"{target_sets} × {reps} · rest {rest_seconds}s"
+
+
+def _routine_preview_payload(db, routine_id: int):
+    """Read-only prescription data; never creates a workout or timer."""
+    routine = db.execute("SELECT * FROM routine WHERE id = ?", (routine_id,)).fetchone()
+    if routine is None:
+        return None
+    rows = db.execute(
+        "SELECT re.exercise_id, re.target_sets, re.rep_min, re.rep_max, re.rest_seconds, re.is_primary, "
+        "e.name, e.cue, e.exercise_type FROM routine_exercise re "
+        "JOIN exercise e ON e.id = re.exercise_id "
+        "WHERE re.routine_id = ? ORDER BY re.position",
+        (routine_id,),
+    ).fetchall()
+    return {
+        "routine": {
+            "id": routine["id"],
+            "program_id": routine["program_id"],
+            "name": routine["name"],
+            "week_number": routine["week_number"],
+            "position": routine["position"],
+            "is_archived": bool(routine["is_archived"]),
+            "accent": accent_for(routine["name"]),
+        },
+        "exercises": [
+            {
+                "exercise_id": row["exercise_id"],
+                "name": row["name"],
+                "cue": row["cue"],
+                "exercise_type": row["exercise_type"],
+                "is_primary": bool(row["is_primary"]),
+                "target_sets": row["target_sets"],
+                "rep_min": row["rep_min"],
+                "rep_max": row["rep_max"],
+                "rest_seconds": row["rest_seconds"],
+                "target": _target_text(row["exercise_type"], row["target_sets"], row["rep_min"], row["rep_max"], row["rest_seconds"]),
+            }
+            for row in rows
+        ],
+    }
 
 
 @app.get("/routines/{routine_id}/preview", response_class=HTMLResponse)
@@ -709,31 +907,27 @@ def routine_preview(request: Request, routine_id: int):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
-    routine = db.execute("SELECT * FROM routine WHERE id = ?", (routine_id,)).fetchone()
-    if routine is None:
-        db.close()
-        return redirect(request, "/routines")
-    rows = db.execute(
-        "SELECT re.target_sets, re.rep_min, re.rep_max, re.rest_seconds, re.is_primary, "
-        "e.name, e.cue, e.exercise_type FROM routine_exercise re "
-        "JOIN exercise e ON e.id = re.exercise_id "
-        "WHERE re.routine_id = ? ORDER BY re.position",
-        (routine_id,),
-    ).fetchall()
+    payload = _routine_preview_payload(db, routine_id)
     db.close()
-    exercises = [{
-        "name": r["name"],
-        "cue": r["cue"],
-        "is_primary": bool(r["is_primary"]),
-        "target": _target_text(r["exercise_type"], r["target_sets"],
-                               r["rep_min"], r["rep_max"], r["rest_seconds"]),
-    } for r in rows]
+    if payload is None:
+        return redirect(request, "/routines")
     return templates.TemplateResponse(request, "routine_preview.html", {
         "active_tab": "workout",
-        "routine": routine,
-        "accent": accent_for(routine["name"]),
-        "exercises": exercises,
+        "routine": payload["routine"],
+        "accent": payload["routine"]["accent"],
+        "exercises": payload["exercises"],
     })
+
+
+@app.get("/api/routines/{routine_id}/preview")
+def api_routine_preview(request: Request, routine_id: int):
+    require_api_auth(request)
+    db = get_db()
+    payload = _routine_preview_payload(db, routine_id)
+    db.close()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Routine not found")
+    return payload
 
 
 @app.post("/programs/{program_id}/activate")
@@ -751,6 +945,24 @@ def activate_program(request: Request, program_id: int):
     return redirect(request, "/routines")
 
 
+@app.post("/api/programs/{program_id}/activate")
+def api_activate_program(request: Request, program_id: int):
+    require_api_auth(request)
+    db = get_db()
+    program = db.execute("SELECT * FROM program WHERE id = ?", (program_id,)).fetchone()
+    if program is None:
+        db.close()
+        raise HTTPException(status_code=404, detail="Program not found")
+    if not program["is_active"]:
+        db.execute("UPDATE program SET is_active = 0 WHERE id != ?", (program_id,))
+        db.execute("UPDATE program SET is_active = 1 WHERE id = ?", (program_id,))
+        db.execute("UPDATE program_state SET program_week = 1 WHERE id = 1")
+        db.commit()
+    state = db.execute("SELECT program_week FROM program_state WHERE id = 1").fetchone()
+    db.close()
+    return {"id": program_id, "is_active": True, "program_week": state["program_week"]}
+
+
 @app.post("/routines/{routine_id}/delete")
 def delete_routine(request: Request, routine_id: int):
     if not auth.is_authed(request):
@@ -762,6 +974,20 @@ def delete_routine(request: Request, routine_id: int):
     db.commit()
     db.close()
     return redirect(request, "/routines")
+
+
+@app.delete("/api/routines/{routine_id}", status_code=204)
+def api_delete_routine(request: Request, routine_id: int):
+    require_api_auth(request)
+    db = get_db()
+    routine = db.execute("SELECT id FROM routine WHERE id = ?", (routine_id,)).fetchone()
+    if routine is None:
+        db.close()
+        raise HTTPException(status_code=404, detail="Routine not found")
+    db.execute("DELETE FROM routine WHERE id = ?", (routine_id,))
+    db.commit()
+    db.close()
+    return Response(status_code=204)
 
 
 @app.post("/routines/{routine_id}/archive")
@@ -780,6 +1006,29 @@ def archive_routine(request: Request, routine_id: int):
     return redirect(request, "/routines")
 
 
+def _set_routine_archived(db, routine_id: int, archived: bool) -> bool:
+    routine = db.execute("SELECT id FROM routine WHERE id = ?", (routine_id,)).fetchone()
+    if routine is None:
+        return False
+    db.execute(
+        "UPDATE routine SET is_archived = ?, updated_at = ? WHERE id = ?",
+        (1 if archived else 0, utcnow(), routine_id),
+    )
+    db.commit()
+    return True
+
+
+@app.post("/api/routines/{routine_id}/archive")
+def api_archive_routine(request: Request, routine_id: int):
+    require_api_auth(request)
+    db = get_db()
+    changed = _set_routine_archived(db, routine_id, archived=True)
+    db.close()
+    if not changed:
+        raise HTTPException(status_code=404, detail="Routine not found")
+    return {"id": routine_id, "is_archived": True}
+
+
 @app.post("/routines/{routine_id}/reactivate")
 def reactivate_routine(request: Request, routine_id: int):
     if not auth.is_authed(request):
@@ -792,6 +1041,17 @@ def reactivate_routine(request: Request, routine_id: int):
     db.commit()
     db.close()
     return redirect(request, "/routines?view=archived")
+
+
+@app.post("/api/routines/{routine_id}/reactivate")
+def api_reactivate_routine(request: Request, routine_id: int):
+    require_api_auth(request)
+    db = get_db()
+    changed = _set_routine_archived(db, routine_id, archived=False)
+    db.close()
+    if not changed:
+        raise HTTPException(status_code=404, detail="Routine not found")
+    return {"id": routine_id, "is_archived": False}
 
 
 def _parse_import(raw: str):
@@ -838,28 +1098,42 @@ def import_apply(request: Request, raw: str = Form("")):
     return redirect(request, "/routines?imported=1")
 
 
-@app.get("/exercises", response_class=HTMLResponse)
-def exercises_page(request: Request, q: str = ""):
-    if not auth.is_authed(request):
-        return login_redirect(request)
-    db = get_db()
+def _exercise_list(db, q: str):
     query = q.strip()
     if query:
-        exercises = db.execute(
+        rows = db.execute(
             "SELECT * FROM exercise WHERE is_archived = 0 AND name LIKE ? ESCAPE '\\' "
             "ORDER BY name COLLATE NOCASE",
             (f"%{_like_escape(query)}%",),
         ).fetchall()
     else:
-        exercises = db.execute(
+        rows = db.execute(
             "SELECT * FROM exercise WHERE is_archived = 0 ORDER BY name COLLATE NOCASE"
         ).fetchall()
+    return query, [dict(row) for row in rows]
+
+
+@app.get("/exercises", response_class=HTMLResponse)
+def exercises_page(request: Request, q: str = ""):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    query, exercises = _exercise_list(db, q)
     db.close()
     return templates.TemplateResponse(request, "exercises.html", {
         "active_tab": "exercises",
         "exercises": exercises,
         "q": query,
     })
+
+
+@app.get("/api/exercises")
+def api_exercises(request: Request, q: str = ""):
+    require_api_auth(request)
+    db = get_db()
+    query, exercises = _exercise_list(db, q)
+    db.close()
+    return {"query": query, "exercises": exercises}
 
 
 # ---- progress + exercise detail + settings ----
@@ -919,31 +1193,44 @@ def _exercise_history(db, exercise):
     return history
 
 
+def _exercise_detail_payload(db, exercise_id: int):
+    exercise = db.execute("SELECT * FROM exercise WHERE id = ?", (exercise_id,)).fetchone()
+    if exercise is None:
+        return None
+    unit = exercise["display_unit"]
+    history = _exercise_history(db, exercise)
+    chart_points = [
+        {"value": h["top_value"], "is_pr": h["is_pr"],
+         "is_deload": h["is_deload"], "label": h["date"][5:]}
+        for h in history if h["top_value"] is not None
+    ]
+    etype = exercise["exercise_type"]
+    return {
+        "exercise": dict(exercise),
+        "unit": metric_label(etype, unit),
+        "history": history,
+        "chart_points": chart_points,
+        "editable": bool(SET_AXES[etype]),
+    }
+
+
 @app.get("/exercise/{exercise_id}", response_class=HTMLResponse)
 def exercise_detail(request: Request, exercise_id: int):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
-    exercise = db.execute("SELECT * FROM exercise WHERE id = ?", (exercise_id,)).fetchone()
-    if exercise is None:
-        db.close()
-        return redirect(request, "/exercises")
-    unit = exercise["display_unit"]
-    history = _exercise_history(db, exercise)
+    payload = _exercise_detail_payload(db, exercise_id)
     db.close()
-    # 'none'-type exercises have no metric to chart; skip sessions with no top
-    chart = charts.line_chart([
-        {"value": h["top_value"], "is_pr": h["is_pr"],
-         "is_deload": h["is_deload"], "label": h["date"][5:]}
-        for h in history if h["top_value"] is not None
-    ])
+    if payload is None:
+        return redirect(request, "/exercises")
+    exercise = payload["exercise"]
     etype = exercise["exercise_type"]
     return templates.TemplateResponse(request, "exercise_detail.html", {
         "active_tab": "exercises",
         "exercise": exercise,
-        "unit": metric_label(etype, unit),
-        "history": list(reversed(history)),
-        "chart": chart,
+        "unit": payload["unit"],
+        "history": list(reversed(payload["history"])),
+        "chart": charts.line_chart(payload["chart_points"]),
         "youtube_query": exercise["youtube_query"],
         # a 'none'-type set records completion only — nothing to correct
         "editable": bool(SET_AXES[etype]),
@@ -954,6 +1241,17 @@ def exercise_detail(request: Request, exercise_id: int):
             "accent": "indigo",  # Exercise Detail is an analysis context
         }),
     })
+
+
+@app.get("/api/exercises/{exercise_id}")
+def api_exercise_detail(request: Request, exercise_id: int):
+    require_api_auth(request)
+    db = get_db()
+    payload = _exercise_detail_payload(db, exercise_id)
+    db.close()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Exercise not found")
+    return payload
 
 
 @app.post("/exercise/{exercise_id}/reset-progress")
@@ -971,6 +1269,21 @@ def reset_exercise_progress(request: Request, exercise_id: int):
     db.commit()
     db.close()
     return redirect(request, f"/exercise/{exercise_id}")
+
+
+@app.post("/api/exercises/{exercise_id}/reset-progress")
+def api_reset_exercise_progress(request: Request, exercise_id: int):
+    require_api_auth(request)
+    db = get_db()
+    exercise = db.execute("SELECT id FROM exercise WHERE id = ?", (exercise_id,)).fetchone()
+    if exercise is None:
+        db.close()
+        raise HTTPException(status_code=404, detail="Exercise not found")
+    reset_at = utcnow()
+    db.execute("UPDATE exercise SET progress_reset_at = ? WHERE id = ?", (reset_at, exercise_id))
+    db.commit()
+    db.close()
+    return {"id": exercise_id, "progress_reset_at": reset_at}
 
 
 @app.get("/progress")
@@ -1212,8 +1525,31 @@ def start_workout(request: Request, routine_id: int = Form(...)):
     return redirect(request, f"/workout/{workout_id}")
 
 
+class ApiWorkoutStartRequest(BaseModel):
+    routine_id: int
+
+
+@app.post("/api/workouts")
+def api_start_workout(request: Request, body: ApiWorkoutStartRequest):
+    require_api_auth(request)
+    db = get_db()
+    routine = db.execute("SELECT id FROM routine WHERE id = ?", (body.routine_id,)).fetchone()
+    if routine is None:
+        db.close()
+        raise HTTPException(status_code=404, detail="Routine not found")
+    started_at = utcnow()
+    is_deload = 1 if progression.deload_active(db, started_at) else 0
+    workout_id = db.execute(
+        "INSERT INTO workout (routine_id, started_at, is_deload) VALUES (?, ?, ?)",
+        (body.routine_id, started_at, is_deload),
+    ).lastrowid
+    db.commit()
+    db.close()
+    return {"id": workout_id, "started_at": started_at, "is_deload": bool(is_deload)}
+
+
 def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
-                      rest_seconds, is_primary):
+                       rest_seconds, is_primary):
     """The per-exercise object the Active Workout JS consumes. Deload workouts
     override the prescription with 60% x 2x10 and skip warmup ramps."""
     workout_id = workout["id"]
@@ -1268,34 +1604,28 @@ def _exercise_payload(db, workout, exercise, target_sets, rep_min, rep_max,
     }
 
 
-@app.get("/workout/{workout_id}", response_class=HTMLResponse)
-def workout_page(request: Request, workout_id: int):
-    if not auth.is_authed(request):
-        return login_redirect(request)
-    db = get_db()
+def _workout_state_payload(db, workout_id: int):
+    """Full current workout state shared by the Active Workout page and API."""
     workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
     if workout is None:
-        db.close()
-        return redirect(request, "/")
-    if workout["finished_at"]:
-        db.close()
-        return redirect(request, f"/workout/{workout_id}/summary")
+        return None
     routine = db.execute("SELECT * FROM routine WHERE id = ?", (workout["routine_id"],)).fetchone()
     rows = db.execute(
         "SELECT re.* FROM routine_exercise re WHERE re.routine_id = ? ORDER BY re.position",
         (workout["routine_id"],),
     ).fetchall()
-    # substitutions recorded earlier in this workout (resume case)
+    # Substitutions recorded before the page/API read must be reflected when a
+    # session resumes rather than replayed separately by the client.
     subs = {
-        r["planned_exercise_id"]: r["actual_exercise_id"]
-        for r in db.execute(
+        row["planned_exercise_id"]: row["actual_exercise_id"]
+        for row in db.execute(
             "SELECT planned_exercise_id, actual_exercise_id FROM substitution "
-            "WHERE workout_id = ?", (workout_id,),
+            "WHERE workout_id = ?", (workout_id,)
         )
     }
     exercises = []
-    for r in rows:
-        exercise_id = r["exercise_id"]
+    for row in rows:
+        exercise_id = row["exercise_id"]
         skipped = False
         if exercise_id in subs:
             if subs[exercise_id] is None:
@@ -1304,27 +1634,64 @@ def workout_page(request: Request, workout_id: int):
                 exercise_id = subs[exercise_id]
         exercise = db.execute("SELECT * FROM exercise WHERE id = ?", (exercise_id,)).fetchone()
         payload = _exercise_payload(
-            db, workout, exercise, r["target_sets"], r["rep_min"], r["rep_max"],
-            r["rest_seconds"], bool(r["is_primary"]),
+            db, workout, exercise, row["target_sets"], row["rep_min"], row["rep_max"],
+            row["rest_seconds"], bool(row["is_primary"]),
         )
-        payload["planned_exercise_id"] = r["exercise_id"]
+        payload["planned_exercise_id"] = row["exercise_id"]
         payload["skipped"] = skipped
         exercises.append(payload)
-    db.close()
     routine_name = routine["name"] if routine else "ad-hoc session"
+    return {
+        "workout": {
+            "id": workout_id,
+            "started_at": workout["started_at"],
+            "finished_at": workout["finished_at"],
+            "is_deload": bool(workout["is_deload"]),
+            "routine_name": routine_name,
+            "accent": accent_for(routine_name),
+        },
+        "exercises": exercises,
+    }
+
+
+@app.get("/workout/{workout_id}", response_class=HTMLResponse)
+def workout_page(request: Request, workout_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    payload = _workout_state_payload(db, workout_id)
+    if payload is None:
+        db.close()
+        return redirect(request, "/")
+    if payload["workout"]["finished_at"]:
+        db.close()
+        return redirect(request, f"/workout/{workout_id}/summary")
+    db.close()
+    workout = payload["workout"]
     state = {
         "workout_id": workout_id,
         "base": base_path(request),
-        "routine_name": routine_name,
-        "accent": accent_for(routine_name),
-        "is_deload": bool(workout["is_deload"]),
-        "exercises": exercises,
+        "routine_name": workout["routine_name"],
+        "accent": workout["accent"],
+        "is_deload": workout["is_deload"],
+        "exercises": payload["exercises"],
     }
     return templates.TemplateResponse(request, "workout.html", {
-        "routine_name": routine_name,
+        "routine_name": workout["routine_name"],
         "accent": state["accent"],
         "state_json": json.dumps(state),
     })
+
+
+@app.get("/api/workouts/{workout_id}")
+def api_workout_state(request: Request, workout_id: int):
+    require_api_auth(request)
+    db = get_db()
+    payload = _workout_state_payload(db, workout_id)
+    db.close()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Workout not found")
+    return payload
 
 
 @app.post("/api/workout/{workout_id}/set")
@@ -1692,6 +2059,23 @@ def discard_workout(request: Request, workout_id: int):
     return redirect(request, "/")
 
 
+@app.post("/api/workouts/{workout_id}/discard", status_code=204)
+def api_discard_workout(request: Request, workout_id: int):
+    require_api_auth(request)
+    db = get_db()
+    workout = db.execute("SELECT finished_at FROM workout WHERE id = ?", (workout_id,)).fetchone()
+    if workout is None:
+        db.close()
+        raise HTTPException(status_code=404, detail="Workout not found")
+    if workout["finished_at"]:
+        db.close()
+        raise HTTPException(status_code=409, detail="Workout is already finished")
+    db.execute("DELETE FROM workout WHERE id = ?", (workout_id,))
+    db.commit()
+    db.close()
+    return Response(status_code=204)
+
+
 @app.post("/workout/{workout_id}/finish")
 def finish_workout(request: Request, workout_id: int):
     if not auth.is_authed(request):
@@ -1706,15 +2090,29 @@ def finish_workout(request: Request, workout_id: int):
     return redirect(request, f"/workout/{workout_id}/summary")
 
 
-@app.get("/workout/{workout_id}/summary", response_class=HTMLResponse)
-def summary_page(request: Request, workout_id: int):
-    if not auth.is_authed(request):
-        return login_redirect(request)
+@app.post("/api/workouts/{workout_id}/finish")
+def api_finish_workout(request: Request, workout_id: int):
+    require_api_auth(request)
     db = get_db()
-    workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
+    workout = db.execute("SELECT finished_at FROM workout WHERE id = ?", (workout_id,)).fetchone()
     if workout is None:
         db.close()
-        return redirect(request, "/")
+        raise HTTPException(status_code=404, detail="Workout not found")
+    if workout["finished_at"]:
+        db.close()
+        raise HTTPException(status_code=409, detail="Workout is already finished")
+    finished_at = utcnow()
+    db.execute("UPDATE workout SET finished_at = ? WHERE id = ?", (finished_at, workout_id))
+    db.commit()
+    db.close()
+    return {"id": workout_id, "finished_at": finished_at}
+
+
+def _workout_summary_payload(db, workout_id: int):
+    """Finished-session aggregation shared by the summary page and API."""
+    workout = db.execute("SELECT * FROM workout WHERE id = ?", (workout_id,)).fetchone()
+    if workout is None:
+        return None
     routine = db.execute("SELECT * FROM routine WHERE id = ?", (workout["routine_id"],)).fetchone()
     rows = db.execute(
         "SELECT s.exercise_id, e.name, e.exercise_type, e.display_unit, "
@@ -1724,39 +2122,83 @@ def summary_page(request: Request, workout_id: int):
         "ORDER BY s.logged_at, s.id",
         (workout_id,),
     ).fetchall()
-    db.close()
-
-    by_exercise = []
+    exercises = []
     index = {}
     total_volume_kg = 0.0
-    for r in rows:
-        if r["weight_kg"] is not None and r["reps"] is not None:
-            total_volume_kg += r["weight_kg"] * r["reps"]
-        if r["exercise_id"] not in index:
-            index[r["exercise_id"]] = len(by_exercise)
-            by_exercise.append({"name": r["name"], "unit": "",
-                                "exercise_id": r["exercise_id"], "sets": []})
-        entry = by_exercise[index[r["exercise_id"]]]
-        cell, suffix = set_cell(r["exercise_type"], r, r["display_unit"])
-        entry["sets"].append(cell)
+    for row in rows:
+        if row["weight_kg"] is not None and row["reps"] is not None:
+            total_volume_kg += row["weight_kg"] * row["reps"]
+        if row["exercise_id"] not in index:
+            index[row["exercise_id"]] = len(exercises)
+            exercises.append({"name": row["name"], "unit": "",
+                              "exercise_id": row["exercise_id"], "sets": []})
+        entry = exercises[index[row["exercise_id"]]]
+        text, suffix = set_cell(row["exercise_type"], row, row["display_unit"])
+        entry["sets"].append({
+            "weight_kg": row["weight_kg"],
+            "reps": row["reps"],
+            "duration_seconds": row["duration_seconds"],
+            "distance_m": row["distance_m"],
+            "text": text,
+        })
         entry["unit"] = suffix
-
+    duration_seconds = None
     duration = None
     if workout["finished_at"]:
-        seconds = (parse_ts(workout["finished_at"]) - parse_ts(workout["started_at"])).total_seconds()
-        duration = f"{int(seconds // 60)} min"
-
+        duration_seconds = int((
+            parse_ts(workout["finished_at"]) - parse_ts(workout["started_at"])
+        ).total_seconds())
+        duration = f"{duration_seconds // 60} min"
     routine_name = routine["name"] if routine else "ad-hoc session"
+    return {
+        "workout": {
+            "id": workout_id,
+            "started_at": workout["started_at"],
+            "finished_at": workout["finished_at"],
+            "routine_name": routine_name,
+            "accent": accent_for(routine_name),
+            "duration_seconds": duration_seconds,
+        },
+        "totals": {"sets": len(rows), "volume_kg": round(total_volume_kg, 2)},
+        "exercises": exercises,
+        "duration": duration,
+    }
+
+
+@app.get("/workout/{workout_id}/summary", response_class=HTMLResponse)
+def summary_page(request: Request, workout_id: int):
+    if not auth.is_authed(request):
+        return login_redirect(request)
+    db = get_db()
+    payload = _workout_summary_payload(db, workout_id)
+    db.close()
+    if payload is None:
+        return redirect(request, "/")
+    workout = payload["workout"]
     return templates.TemplateResponse(request, "summary.html", {
         # tab bar remounts at Finish Summary (item 10); no tab is highlighted
         # since the summary isn't itself one of the four destinations.
         "active_tab": "summary",
         "workout_id": workout_id,
-        "routine_name": routine_name,
-        "accent": accent_for(routine_name),
+        "routine_name": workout["routine_name"],
+        "accent": workout["accent"],
         "finished": bool(workout["finished_at"]),
-        "duration": duration,
-        "total_sets": len(rows),
-        "total_volume": f"{total_volume_kg:,.0f} kg",
-        "exercises": by_exercise,
+        "duration": payload["duration"],
+        "total_sets": payload["totals"]["sets"],
+        "total_volume": f"{payload['totals']['volume_kg']:,.0f} kg",
+        "exercises": [{
+            **exercise,
+            "sets": [set_log["text"] for set_log in exercise["sets"]],
+        } for exercise in payload["exercises"]],
     })
+
+
+@app.get("/api/workouts/{workout_id}/summary")
+def api_workout_summary(request: Request, workout_id: int):
+    require_api_auth(request)
+    db = get_db()
+    payload = _workout_summary_payload(db, workout_id)
+    db.close()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Workout not found")
+    return payload

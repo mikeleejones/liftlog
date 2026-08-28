@@ -1,9 +1,17 @@
 # Workout Tracker — Data Model (Step 4)
 
-Storage: SQLite, single file, server-side on ultra.cc. All weights stored
-canonically in kg as REAL. All timestamps stored as ISO 8601 UTC strings.
-IDs are INTEGER PRIMARY KEY (SQLite rowid aliases) — no UUIDs needed for a
-single-user, single-database app.
+Storage: SQLite, single file, server-side on the OVH VPS. SQLAlchemy models
+in `app/models.py` represent this schema; Alembic owns all schema changes from
+v0.6 forward (`alembic/versions/`). All weights stored canonically in kg as
+REAL. All timestamps stored as ISO 8601 UTC strings. IDs are INTEGER PRIMARY
+KEY (SQLite rowid aliases) — no UUIDs needed for a single-user,
+single-database app.
+
+Existing pre-v0.6 databases already match Alembic baseline `20260827_01` and
+must be marked once with `alembic stamp 20260827_01`; this adds only Alembic's
+version record and does not alter workout data. New empty databases use
+`alembic upgrade head`. Never reintroduce the retired `PRAGMA user_version`
+or runtime schema-migration chain from the old `app/db.py`.
 
 ---
 
