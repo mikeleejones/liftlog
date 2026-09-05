@@ -176,6 +176,15 @@ padding instead of 120px.
 **Sheets** (jump list, substitution picker, edit set): bottom sheets on
 --surface, drag handle, same card idiom inside.
 
+**AI program builder**: a tabbed Workout subpage, not a fifth nav destination.
+The transcript is a single narrow column: assistant bubbles stay on --surface
+with a 3px --teal left edge; user bubbles align right with an --indigo border
+and very pale indigo fill. Each carries a tiny mono role label and Inter body
+copy. The composer is a sticky --bg/blurred footer with a bordered multiline
+input and a full-width indigo SEND button. A generated program uses the same
+routine/exercise preview cards and archive warning as any proposed replacement;
+APPLY PROGRAM is the only destructive action and stays below that full preview.
+
 **Edit-set sheet** (item 18): the one component shared verbatim between Active
 Workout and Exercise Detail, so correcting a set feels the same wherever it's
 reached. Standard sheet chrome, then the same big-value line and stepper pair

@@ -1,4 +1,5 @@
 import json
+import logging
 import secrets
 import sys
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from . import ai, auth, charts, exporter, importer, progression
+from . import ai, ai_program, auth, charts, exporter, importer, progression
 from .config import SECRET
 from .db import can_make_ai_call, get_db, init_db, run_week_completion, sessions_required, utcnow
 
@@ -19,6 +20,7 @@ if not SECRET:
 
 APP_DIR = Path(__file__).resolve().parent
 app = FastAPI()
+logger = logging.getLogger("uvicorn.error")
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 
 
@@ -722,17 +724,31 @@ def api_home(request: Request):
     }
 
 
+def _defer_deload(db) -> str:
+    state = db.execute("SELECT week_anchor FROM program_state WHERE id = 1").fetchone()
+    until = (parse_ts(state["week_anchor"]) + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db.execute("UPDATE program_state SET deload_deferred_until = ? WHERE id = 1", (until,))
+    db.commit()
+    return until
+
+
 @app.post("/deload/defer")
 def defer_deload(request: Request):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
-    state = db.execute("SELECT week_anchor FROM program_state WHERE id = 1").fetchone()
-    until = (parse_ts(state["week_anchor"]) + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    db.execute("UPDATE program_state SET deload_deferred_until = ? WHERE id = 1", (until,))
-    db.commit()
+    _defer_deload(db)
     db.close()
     return redirect(request, "/")
+
+
+@app.post("/api/deload/defer")
+def api_defer_deload(request: Request):
+    require_api_auth(request)
+    db = get_db()
+    deferred_until = _defer_deload(db)
+    db.close()
+    return {"deload_deferred_until": deferred_until}
 
 
 # ---- routines + import ----
@@ -1054,48 +1070,119 @@ def api_reactivate_routine(request: Request, routine_id: int):
     return {"id": routine_id, "is_archived": False}
 
 
-def _parse_import(raw: str):
-    """Returns (payload, errors). payload is None when unusable."""
+class ApiProgramBuilderMessage(BaseModel):
+    content: str
+
+
+def _program_draft(db):
+    row = db.execute("SELECT * FROM program_draft WHERE id = 1").fetchone()
+    if row is None:
+        return [], None
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as e:
-        return None, [f"not valid JSON: {e.msg} (line {e.lineno})"]
-    errors = importer.validate(payload)
-    return (None, errors) if errors else (payload, [])
+        messages = json.loads(row["messages_json"])
+        program = json.loads(row["program_json"]) if row["program_json"] else None
+    except (TypeError, ValueError):
+        return [], None
+    if not isinstance(messages, list) or not isinstance(program, (dict, type(None))):
+        return [], None
+    return messages, program
 
 
-@app.post("/routines/import/preview", response_class=HTMLResponse)
-def import_preview(request: Request, raw: str = Form("")):
-    if not auth.is_authed(request):
-        return login_redirect(request)
-    payload, errors = _parse_import(raw)
-    if errors:
-        # import lives on the Profile tab now — re-render it with the errors + raw
-        db = get_db()
-        context = _settings_context(db, import_errors=errors, import_raw=raw)
-        db.close()
-        return templates.TemplateResponse(request, "settings.html", context, status_code=422)
+def _program_draft_plan(db, program):
+    if not program:
+        return None
+    payload = {"version": 2, "program": program}
+    if importer.validate(payload):
+        return None
+    return importer.plan(db, importer.normalize(payload))
+
+
+def _builder_context(db):
+    exercises = [row["name"] for row in db.execute(
+        "SELECT name FROM exercise WHERE is_archived = 0 ORDER BY name COLLATE NOCASE"
+    )]
+    routines = [row["name"] for row in db.execute(
+        "SELECT r.name FROM routine r JOIN program p ON p.id = r.program_id "
+        "WHERE p.is_active = 1 AND r.is_archived = 0 ORDER BY r.position"
+    )]
+    return exercises, routines
+
+
+@app.get("/api/programs/builder")
+def api_program_builder(request: Request):
+    require_api_auth(request)
     db = get_db()
-    plan = importer.plan(db, importer.normalize(payload))
+    messages, program = _program_draft(db)
+    plan = _program_draft_plan(db, program)
     db.close()
-    return templates.TemplateResponse(request, "import_preview.html", {
-        "plan": plan,
-        "raw": raw,
-    })
+    return {"messages": messages, "plan": plan}
 
 
-@app.post("/routines/import/apply")
-def import_apply(request: Request, raw: str = Form("")):
-    if not auth.is_authed(request):
-        return login_redirect(request)
-    payload, errors = _parse_import(raw)
-    if errors:
-        return redirect(request, "/settings")
+@app.post("/api/programs/builder/message")
+def api_program_builder_message(request: Request, body: ApiProgramBuilderMessage):
+    require_api_auth(request)
+    content = body.content.strip()
+    if not content or len(content) > 4000:
+        raise HTTPException(status_code=400, detail="Message must be between 1 and 4000 characters")
     db = get_db()
-    importer.apply_import(db, importer.normalize(payload), utcnow())
+    messages, _ = _program_draft(db)
+    messages.append({"role": "user", "content": content})
+    if not can_make_ai_call(db):
+        db.close()
+        return {"state": "limit", "message": "daily AI limit reached — try again later"}
+    exercise_names, active_program = _builder_context(db)
+    objective_row = db.execute("SELECT objective FROM program_state WHERE id = 1").fetchone()
+    objective = objective_row["objective"] if objective_row else None
+    db.execute("INSERT INTO ai_call_log (created_at) VALUES (?)", (utcnow(),))
+    db.commit()
+    try:
+        turn = ai_program.generate_turn(messages, exercise_names, active_program, objective)
+    except (ai.AICallError, ai.AIValidationError):
+        logger.exception("AI program-builder turn failed")
+        db.close()
+        return {"state": "error", "message": "couldn't reach the AI, try again"}
+    messages.append({"role": "assistant", "content": turn["message"]})
+    program = turn["program"] if turn["ready"] else None
+    now = utcnow()
+    db.execute(
+        "INSERT INTO program_draft (id, messages_json, program_json, updated_at) VALUES (1, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET messages_json = excluded.messages_json, "
+        "program_json = excluded.program_json, updated_at = excluded.updated_at",
+        (json.dumps(messages), json.dumps(program) if program else None, now),
+    )
+    plan = _program_draft_plan(db, program)
     db.commit()
     db.close()
-    return redirect(request, "/routines?imported=1")
+    return {"state": "ok", "message": turn["message"], "plan": plan}
+
+
+@app.post("/api/programs/builder/apply")
+def api_program_builder_apply(request: Request):
+    require_api_auth(request)
+    db = get_db()
+    _, program = _program_draft(db)
+    payload = {"version": 2, "program": program}
+    errors = importer.validate(payload)
+    if errors:
+        db.close()
+        return {"errors": errors or ["No valid program draft to apply"]}
+    norm = importer.normalize(payload)
+    result = importer.plan(db, norm)
+    importer.apply_import(db, norm, utcnow())
+    db.execute("DELETE FROM program_draft WHERE id = 1")
+    db.commit()
+    db.close()
+    return {"result": result}
+
+
+@app.post("/api/programs/builder/discard")
+def api_program_builder_discard(request: Request):
+    require_api_auth(request)
+    db = get_db()
+    db.execute("DELETE FROM program_draft WHERE id = 1")
+    db.commit()
+    db.close()
+    return {"ok": True}
 
 
 def _exercise_list(db, q: str):
@@ -1225,6 +1312,7 @@ def exercise_detail(request: Request, exercise_id: int):
         return redirect(request, "/exercises")
     exercise = payload["exercise"]
     etype = exercise["exercise_type"]
+    unit = exercise["display_unit"]
     return templates.TemplateResponse(request, "exercise_detail.html", {
         "active_tab": "exercises",
         "exercise": exercise,
@@ -1293,10 +1381,10 @@ def progress_page(request: Request):
     return redirect(request, "/")
 
 
-def _settings_context(db, new_token=None, import_errors=None, import_raw=""):
+def _settings_payload(db):
+    """Settings/Profile data shared by the HTML page and `GET /api/settings`."""
     state = db.execute("SELECT * FROM program_state WHERE id = 1").fetchone()
     now = utcnow()
-    deload = progression.deload_active(db, now)
     counts = {
         "exercises": db.execute("SELECT COUNT(*) FROM exercise").fetchone()[0],
         "workouts": db.execute(
@@ -1308,16 +1396,30 @@ def _settings_context(db, new_token=None, import_errors=None, import_raw=""):
         "SELECT id, name, created_at, last_used_at FROM api_token ORDER BY created_at DESC, id DESC"
     ).fetchall()
     return {
-        "active_tab": "profile",
-        "deload": deload,
+        "deload_active": progression.deload_active(db, now),
+        "deload_deferred": bool(state["deload_deferred_until"] and state["deload_deferred_until"] > now),
         "weeks_since_deload": state["weeks_since_deload"],
         "completed_weeks": state["completed_weeks"],
-        "deload_deferred": bool(state["deload_deferred_until"] and state["deload_deferred_until"] > now),
         "counts": counts,
         "objective": state["objective"] or "",
+        "bodyweight_kg": state["bodyweight_kg"],
+        "tokens": [dict(t) for t in tokens],
+    }
+
+
+def _settings_context(db, new_token=None, import_errors=None, import_raw=""):
+    payload = _settings_payload(db)
+    return {
+        "active_tab": "profile",
+        "deload": payload["deload_active"],
+        "weeks_since_deload": payload["weeks_since_deload"],
+        "completed_weeks": payload["completed_weeks"],
+        "deload_deferred": payload["deload_deferred"],
+        "counts": payload["counts"],
+        "objective": payload["objective"],
         # cleaned for the input's value: '80' not '80.0', '' when unset
-        "bodyweight_kg": ("%g" % state["bodyweight_kg"]) if state["bodyweight_kg"] else "",
-        "tokens": tokens,
+        "bodyweight_kg": ("%g" % payload["bodyweight_kg"]) if payload["bodyweight_kg"] else "",
+        "tokens": payload["tokens"],
         "new_token": new_token,
         "import_errors": import_errors or [],
         "import_raw": import_raw,
@@ -1334,22 +1436,58 @@ def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", context)
 
 
+@app.get("/api/settings")
+def api_settings(request: Request):
+    require_api_auth(request)
+    db = get_db()
+    payload = _settings_payload(db)
+    db.close()
+    return {
+        "deload": {"active": payload["deload_active"], "deferred": payload["deload_deferred"]},
+        "weeks_since_deload": payload["weeks_since_deload"],
+        "completed_weeks": payload["completed_weeks"],
+        "counts": payload["counts"],
+        "objective": payload["objective"],
+        "bodyweight_kg": payload["bodyweight_kg"],
+        "tokens": payload["tokens"],
+    }
+
+
+def _create_api_token(db, name: str) -> dict:
+    name = (name or "").strip() or "unnamed token"
+    # long random URL-safe string; shown exactly once here and never again
+    token = secrets.token_urlsafe(32)
+    created_at = utcnow()
+    token_id = db.execute(
+        "INSERT INTO api_token (name, token, scope, created_at) VALUES (?, ?, 'read_only', ?)",
+        (name, token, created_at),
+    ).lastrowid
+    db.commit()
+    return {"id": token_id, "name": name, "token": token, "created_at": created_at}
+
+
 @app.post("/settings/tokens", response_class=HTMLResponse)
 def create_token(request: Request, name: str = Form("")):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
-    name = name.strip() or "unnamed token"
-    # long random URL-safe string; shown exactly once here and never again
-    token = secrets.token_urlsafe(32)
-    db.execute(
-        "INSERT INTO api_token (name, token, scope, created_at) VALUES (?, ?, 'read_only', ?)",
-        (name, token, utcnow()),
-    )
-    db.commit()
-    context = _settings_context(db, new_token={"name": name, "token": token})
+    created = _create_api_token(db, name)
+    context = _settings_context(db, new_token={"name": created["name"], "token": created["token"]})
     db.close()
     return templates.TemplateResponse(request, "settings.html", context)
+
+
+class ApiTokenCreateRequest(BaseModel):
+    name: str = ""
+
+
+@app.post("/api/settings/tokens")
+def api_create_token(request: Request, body: ApiTokenCreateRequest):
+    require_api_auth(request)
+    db = get_db()
+    created = _create_api_token(db, body.name)
+    db.close()
+    return created
 
 
 @app.post("/settings/tokens/{token_id}/revoke")
@@ -1363,18 +1501,58 @@ def revoke_token(request: Request, token_id: int):
     return redirect(request, "/settings")
 
 
+@app.delete("/api/settings/tokens/{token_id}", status_code=204)
+def api_revoke_token(request: Request, token_id: int):
+    require_api_auth(request)
+    db = get_db()
+    token = db.execute("SELECT id FROM api_token WHERE id = ?", (token_id,)).fetchone()
+    if token is None:
+        db.close()
+        raise HTTPException(status_code=404, detail="Token not found")
+    db.execute("DELETE FROM api_token WHERE id = ?", (token_id,))
+    db.commit()
+    db.close()
+    return Response(status_code=204)
+
+
+def _save_objective(db, objective) -> str:
+    cleaned = (objective or "").strip() or None
+    db.execute("UPDATE program_state SET objective = ? WHERE id = 1", (cleaned,))
+    db.commit()
+    return cleaned or ""
+
+
 @app.post("/settings/objective")
 def save_objective(request: Request, objective: str = Form("")):
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()
-    db.execute(
-        "UPDATE program_state SET objective = ? WHERE id = 1",
-        (objective.strip() or None,),
-    )
-    db.commit()
+    _save_objective(db, objective)
     db.close()
     return redirect(request, "/settings")
+
+
+class ApiObjectiveRequest(BaseModel):
+    objective: str = ""
+
+
+@app.post("/api/settings/objective")
+def api_save_objective(request: Request, body: ApiObjectiveRequest):
+    require_api_auth(request)
+    db = get_db()
+    objective = _save_objective(db, body.objective)
+    db.close()
+    return {"objective": objective}
+
+
+def _save_bodyweight(db, bodyweight_kg):
+    """Blank/None or non-positive input clears bodyweight to NULL, so the TCX
+    export falls back to Calories 0 (BACKLOG item 11) rather than a fabricated
+    number."""
+    parsed = bodyweight_kg if (bodyweight_kg is not None and bodyweight_kg > 0) else None
+    db.execute("UPDATE program_state SET bodyweight_kg = ? WHERE id = 1", (parsed,))
+    db.commit()
+    return parsed
 
 
 @app.post("/settings/bodyweight")
@@ -1391,13 +1569,23 @@ def save_bodyweight(request: Request, bodyweight_kg: str = Form("")):
             parsed = float(value)
         except ValueError:
             parsed = None
-        if parsed is not None and parsed <= 0:
-            parsed = None
     db = get_db()
-    db.execute("UPDATE program_state SET bodyweight_kg = ? WHERE id = 1", (parsed,))
-    db.commit()
+    _save_bodyweight(db, parsed)
     db.close()
     return redirect(request, "/settings")
+
+
+class ApiBodyweightRequest(BaseModel):
+    bodyweight_kg: float | None = None
+
+
+@app.post("/api/settings/bodyweight")
+def api_save_bodyweight(request: Request, body: ApiBodyweightRequest):
+    require_api_auth(request)
+    db = get_db()
+    bodyweight_kg = _save_bodyweight(db, body.bodyweight_kg)
+    db.close()
+    return {"bodyweight_kg": bodyweight_kg}
 
 
 @app.get("/export")
@@ -1418,7 +1606,7 @@ def export_json(request: Request):
 def export_program_json(request: Request):
     """Program-only export (BACKLOG item 9): the active program in the exact v2
     import shape, no history. Browser-only (cookie), not part of the token
-    surface. Re-importable through the Import screen as-is."""
+    surface. Uses the AI program builder's internal v2 shape."""
     if not auth.is_authed(request):
         return login_redirect(request)
     db = get_db()

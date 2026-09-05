@@ -10,8 +10,8 @@ if a change is genuinely warranted, propose amending this file first, then code.
 
 A personal workout tracker for one user, self-hosted on a shared OVH VPS as a
 web app with a Python backend and SQLite storage, accessed from iPhone (primary, at the
-gym, Chrome) and MacBook (routine imports, progression charts, analysis).
-Routines are designed with Claude in claude.ai and imported as JSON. It tracks
+gym, Chrome) and MacBook (program design, progression charts, analysis).
+Programs are designed through an in-app Claude Haiku conversation. It tracks
 routines, sets, reps, and weight; runs a rest timer; and suggests progressive
 overload using double progression with deload weeks. Exercise demos are YouTube
 search links, so the exercise library is unlimited. Data is exportable as JSON
@@ -48,10 +48,9 @@ or per-set RPE. Do not add these.
 
 ## Binding specs in docs/
 
-- `docs/schema.md` — the complete data model: 8 tables (exercise, routine,
-  routine_exercise, workout, set_log, substitution, program, program_state),
-  derived-value rules (progression, stall, warmup ramp), unit handling, the
-  Claude JSON import format, and import/dedupe semantics. Implement exactly;
+- `docs/schema.md` — the complete data model, derived-value rules (progression,
+  stall, warmup ramp), unit handling, the internal AI program format, and
+  program replacement/deduplication semantics. Implement exactly;
   do not add tables or columns without amending the doc.
 - `docs/design.md` — **v2 (light)** design language (BACKLOG item 15; v1 dark
   is deprecated): color tokens, typography (Inter for ALL UI text, JetBrains
@@ -73,15 +72,15 @@ A persistent bottom tab bar with four destinations:
   completed weeks, weeks-since-deload, honesty audit). Progress is no longer a
   separate screen; `/progress` redirects to Home.
 - **Workout** — the routines list (Active/Archived tabs, per-routine
-  Archive/Delete); where a session starts from. Backing URL `/routines`.
+  Archive/Delete) and AI program builder; where a session starts from. Backing URL `/routines`.
   Tapping a routine row opens a read-only preview of its exercises
   (`/routines/{id}/preview`, keeps the tab bar) — the preview creates no
   workout and starts no timer; only an explicit START (present on both the
   preview and the quick-start cards) begins a session.
 - **Exercises** — the full exercise library, searchable by name. The front
   door to Exercise Detail, which is no longer reachable only through a routine.
-- **Profile** — Import (paste JSON + preview), both exports (full backup +
-  program-only), the API token manager, the program objective field, and
+- **Profile** — both exports (full backup + program-only), the API token
+  manager, the program objective field, and
   shared-secret/session info. All data movement and configuration lives here.
   Backing URL `/settings`.
 
@@ -171,16 +170,23 @@ Exercises tab and keeps the bar (Exercises active).
     Rental Radar's already-proven Caddy block on the same VPS. `docs/design.md`
     is unchanged and remains the single source of visual truth for the new
     frontend. The old ultra.cc subpath/root-path deployment support
-    (`LIFTLOG_ROOT_PATH`) is dropped as dead code now that real deployment is
-    per-subdomain Caddy routing on the OVH VPS (see Server access).
+     (`LIFTLOG_ROOT_PATH`) is dropped as dead code now that real deployment is
+     per-subdomain Caddy routing on the OVH VPS (see Server access).
+16. AI program builder (added 2026-08-28): Program creation is an in-app,
+    multi-turn Claude Haiku conversation in the Workout tab, not a pasted
+    claude.ai JSON payload. The model emits the documented v2 program object,
+    which is validated and applied through the existing importer so routine
+    replacement, archival, case-insensitive exercise reuse, and history
+    preservation remain unchanged. A candidate is always previewed before it
+    can be applied. This supersedes the claude.ai-only import constraint.
 
 ## Build plan — work ONE increment at a time, wait for user testing between
 
 - v0.1 Log: FastAPI + SQLite per schema, shared-secret auth, Home + Active
   Workout + Finish screens, ONE hardcoded routine for testing, runnable
   locally (accessible from iPhone via Mac's LAN IP).
-- v0.2 Import: Routines screen, JSON import with preview + dedupe semantics,
-  exercise library view. (After this, routines come from claude.ai.)
+- v0.2 Import: Routines screen, program creation with preview + dedupe semantics,
+  exercise library view. (Superseded by decision #16's in-app AI builder.)
 - v0.2.5 Programs: program table grouping routines, multi-week programs,
   import v2 (program envelope), program activation, weekly compliance derived
   from the active program week instead of a fixed 3.
@@ -194,7 +200,7 @@ Exercises tab and keeps the bar (Exercises active).
   nav, AI substitutions, automation tokens, light-theme v2 redesign, TCX
   export, minimize/mini-bar, Home v2 charts, and more — see git log for the
   full list).
-- v0.6 Frontend migration (decision #15, in progress): FastAPI → JSON API +
+- v0.6 Frontend migration (decision #15, complete): FastAPI → JSON API +
   SQLAlchemy/Alembic; server-rendered Jinja2 + vanilla JS → React/Vite SPA.
   Phased and gated per screen, tested on `liftlog-staging` (and at the gym for
   Active Workout) before each next phase — same discipline as v0.1-v0.5, just
@@ -221,8 +227,6 @@ signed off. Do not build ahead "while you're in there."
   done, not just "compiles and loads."
 - Schema changes require updating docs/schema.md in the same commit.
 - Never commit secrets. .gitignore the SQLite database file and any .env.
-- Routine design/programming questions are NOT Claude Code's job — those go
-  back to the claude.ai conversation; this repo only consumes the JSON.
 - Place new features in the tab matching their KIND, not their build order
   (item 10's whole point): a single exercise's data/history goes in Exercises;
   routine composition or session-starting goes in Workout; data movement or

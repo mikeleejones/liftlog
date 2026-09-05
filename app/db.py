@@ -21,7 +21,7 @@ from sqlalchemy import create_engine
 
 from .config import DB_PATH
 
-ALEMBIC_BASELINE = "20260827_01"
+ALEMBIC_BASELINE = "20260828_02"
 AI_CALLS_PER_DAY_LIMIT = 100
 
 
@@ -139,7 +139,7 @@ def init_db() -> None:
     """Validate Alembic ownership and initialize only required singleton data.
 
     This no longer creates or alters tables. Run `alembic upgrade head` for a
-    new database, or `alembic stamp 20260827_01` once for an existing database
+    new database, or `alembic stamp 20260827_01` once for an existing pre-v0.6 database
     that already matches this baseline.
     """
     db = get_db()

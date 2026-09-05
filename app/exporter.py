@@ -42,7 +42,7 @@ def _routine_exercises(db, routine_id):
 def export_program(db):
     """The active program alone, in the exact v2 import-envelope shape — no
     workout/set_log/substitution history at all. Byte-for-byte re-importable
-    through the Import screen with no transformation (BACKLOG item 9). Only
+    through the AI program builder's internal apply path with no transformation.
     live (non-archived) routines are included, so a round-trip doesn't drag
     dropped routines back in. Returns None when there is no active program."""
     p = db.execute("SELECT * FROM program WHERE is_active = 1").fetchone()

@@ -30,6 +30,12 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 ```
 
+`requirements-dev.txt` (added in v0.6 Phase 2.5) adds `pytest`/`httpx` on top of
+`requirements.txt`, for running the `tests/` regression suite locally
+(`pip install -r requirements-dev.txt && pytest`). It is intentionally never
+installed on `liftlog`/`liftlog-staging` — servers only ever run
+`pip install -r requirements.txt`.
+
 **Current staging exception:** `liftlog-staging` intentionally uses the
 production app directory's interpreter (`/home/ubuntu/apps/liftlog/venv`) with
 its own working directory and SQLite file. Its pm2 process is configured that
@@ -67,21 +73,40 @@ stopped rather than crash-looping forever.
 ## 3. Caddy
 
 Config lives at `/etc/caddy/Caddyfile` on the server (not in this repo).
-**Current state** (pre-migration, FastAPI serves Jinja2-rendered HTML
-directly):
+**Current state:** both production and staging serve the React SPA directly
+through Caddy, with `/api/*` proxied to their respective FastAPI backends:
 
 ```
 liftlog.mrradcl.com {
-    reverse_proxy localhost:8001
+    root * /home/ubuntu/apps/liftlog/frontend/dist
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy localhost:8001
+    }
+
+    handle {
+        try_files {path} /index.html
+        file_server
+    }
 }
 liftlog-staging.mrradcl.com {
-    reverse_proxy 127.0.0.1:8011
+    root * /home/ubuntu/apps/liftlog-staging/frontend/dist
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8011
+    }
+
+    handle {
+        try_files {path} /index.html
+        file_server
+    }
 }
 ```
 
-**Target state after the v0.6 frontend migration** (React SPA build served
-directly by Caddy, API calls proxied through) — mirrors the
-`rentalradar.mrradcl.com` block already live on this same VPS:
+This Caddy pattern mirrors the `rentalradar.mrradcl.com` block already live on
+the same VPS:
 
 ```
 liftlog.mrradcl.com {
@@ -146,6 +171,12 @@ ssh mrradcl 'cd ~/apps/liftlog-staging && /home/ubuntu/apps/liftlog/venv/bin/pip
 
 No `--exclude='frontend'` this time — `frontend/dist` needs to reach the
 server since Caddy serves it directly (see section 3).
+
+## Staging SPA cutover
+
+Both environments serve the normal Vite build from `/`; use `npm run build`,
+not `build:preview`, before syncing `frontend/`. The former `/preview/` handler
+was removed during the staging cutover.
 
 ## Schema / database
 

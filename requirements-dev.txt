@@ -1,0 +1,5 @@
+# Dev-only dependencies for the pytest/httpx regression suite (v0.6 Phase 2.5).
+# Not installed in production/staging — see DEPLOY.md.
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27

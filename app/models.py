@@ -154,6 +154,16 @@ class AiCallLog(Base):
     created_at: Mapped[str] = mapped_column(Text)
 
 
+class ProgramDraft(Base):
+    __tablename__ = "program_draft"
+    __table_args__ = (CheckConstraint("id = 1"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    messages_json: Mapped[str] = mapped_column(Text)
+    program_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+
 class ApiToken(Base):
     __tablename__ = "api_token"
     __table_args__ = (CheckConstraint("scope IN ('read_only')"),)

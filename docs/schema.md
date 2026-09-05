@@ -18,7 +18,7 @@ or runtime schema-migration chain from the old `app/db.py`.
 ## Tables
 
 ### exercise
-The library. One row per distinct movement, created via import or on-the-fly
+The library. One row per distinct movement, created via AI program builder or on-the-fly
 substitution. Never deleted if it has history (soft-flag instead).
 
 ```sql
@@ -263,6 +263,21 @@ CREATE TABLE ai_call_log (
 );
 ```
 
+### program_draft
+The singleton in-progress AI program-builder conversation. It is created on
+the first user message, survives navigation, and is cleared after Apply or
+Start over. It never represents a live program until the candidate is
+revalidated and passed through the importer.
+
+```sql
+CREATE TABLE program_draft (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    messages_json TEXT NOT NULL,  -- [{role: user|assistant, content: string}]
+    program_json  TEXT,           -- nullable validated v2 program candidate
+    updated_at    TEXT NOT NULL
+);
+```
+
 ### api_token
 Read-only automation credentials (BACKLOG item 7) for external tools — an iPhone
 Shortcut, a script — to read data without holding the browser login secret. Not a
@@ -342,9 +357,11 @@ Store kg. Render and step in `exercise.display_unit`: stepper = 2.5 kg or
 rounded value converts back to kg for storage. Tapping the unit chip on the
 Active Workout screen updates `exercise.display_unit` persistently.
 
-## Claude import format
+## AI program builder format (internal)
 
-### v2 (current) — program envelope
+The model generates this v2 program envelope internally after a multi-turn
+conversation. It is validated before preview and again before apply; there is
+no raw JSON-paste endpoint.
 
 ```json
 {
@@ -378,23 +395,16 @@ Active Workout screen updates `exercise.display_unit` persistently.
 ```
 
 `week` is optional (default 1); `weeks` is optional (default: highest `week`
-used). `exercise_type` is optional (default `weight_reps`, so programs exported
-before v0.5 import unchanged); when present it must be one of the seven enum
+used). `exercise_type` is optional (default `weight_reps`); when present it must be one of the seven enum
 values. `display_unit` is also optional per exercise — when omitted, distance
 types default to `km` and everything else to `kg`; for the single-axis
 `reps_only`/`duration` range types, `rep_min`/`rep_max` carry the target reps /
 seconds / metres. Semantics: program matched by name -> replace (routines matched by
 name within the program get their routine_exercise rows replaced; routines
-absent from the import are archived); unknown program -> create. The imported
-program becomes active. Re-importing the already-active program keeps
+absent from the candidate are archived); unknown program -> create. The applied
+program becomes active. Reapplying the already-active program keeps
 `program_week` (clamped to the new `weeks`); activating a different program
 resets it to 1.
-
-### v1 (still accepted) — bare routines
-
-Same shape without the program envelope: `{"version": 1, "routines": [...]}`.
-Routines are upserted into the active program at week 1 (an active program is
-created if none exists); nothing is archived.
 
 `equipment` is optional per exercise (nullable free text). It follows the same
 update-on-name-match semantics as cue/youtube_query/tags: a matched exercise

@@ -35,12 +35,13 @@ each gains exact request/response schemas before implementation.
 |---|---|---|
 | Auth | `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/session` | Implemented and staging-verified |
 | Home / progress | `GET /api/home` | Implemented and staging-verified |
-| Programs / routines | list, preview, activate, archive/reactivate, delete | Read APIs staging-verified; mutation sign-off pending |
-| Exercises | list, detail/history/chart, reset progress | Implemented; staging verification pending |
-| Workouts / sets | start, resume, log/edit set, substitutions, finish, TCX | Implemented; staging verification pending |
-| Profile / import / export | configuration, import preview/confirm, full/program export | Not started |
-| Automation tokens | create/list/revoke token and `GET /api/latest-workout` | Not started |
-| AI substitutions | cached suggestion and selection actions | Not started |
+| Programs / routines | list, preview, activate, archive/reactivate, delete | Implemented and staging-verified (mutations signed off) |
+| Exercises | list, detail/history/chart, reset progress | Implemented and staging-verified (reset-progress signed off) |
+| Workouts / sets | start, resume/state, log/edit set, substitutions, finish, discard, summary, TCX | Implemented and staging-verified (lifecycle signed off; state/summary reads verified) |
+| AI substitutions | cached suggestion and selection actions | Implemented and staging-verified (documented under Workouts / Sets) |
+| Profile / export | configuration, tokens, exports, deload defer | Implemented and staging-verified |
+| AI program builder | draft, chat turn, preview/apply/discard | Implemented; staging verification pending |
+| Automation tokens | `GET /api/latest-workout` (done); create/list/revoke token (new, see Profile / Settings) | Implemented; staging verification pending |
 
 ## Compatibility rule
 
@@ -312,3 +313,83 @@ download outside `/api/*`. It exports finished workouts only as
 `application/vnd.garmin.tcx+xml`; the browser receives an attachment named
 `liftlog-workout-{id}-{date}.tcx`. The existing server-rendered redirect
 behavior for an unknown or unfinished workout is retained.
+
+## Profile / Settings
+
+All endpoints in this group require the browser cookie; automation tokens are
+not accepted (token management is itself one of these endpoints).
+
+### Settings data
+
+`GET /api/settings` returns the Profile tab's dashboard data. `bodyweight_kg`
+is canonical kilograms or `null` when unset; token rows never include the
+token secret itself (that's shown exactly once, at creation).
+
+```json
+{
+  "deload": {"active": false, "deferred": false},
+  "weeks_since_deload": 1,
+  "completed_weeks": 3,
+  "counts": {"exercises": 42, "workouts": 30, "sets": 640},
+  "objective": "HYROX prep",
+  "bodyweight_kg": 82.5,
+  "tokens": [{"id": 1, "name": "Shortcuts", "created_at": "2026-08-01T00:00:00Z", "last_used_at": "2026-08-27T12:00:00Z"}]
+}
+```
+
+### Automation tokens
+
+`POST /api/settings/tokens` accepts `{"name":"..."}` (defaults to "unnamed
+token" when blank) and returns the new token's secret exactly once:
+
+```json
+{"id": 2, "name": "Shortcuts", "token": "<opaque url-safe secret>", "created_at": "2026-08-27T15:00:00Z"}
+```
+
+`DELETE /api/settings/tokens/{token_id}` returns `204 No Content`, or `404`
+with `{"detail":"Token not found"}`. Revoking a token immediately invalidates
+it for `token_or_cookie_authed` consumers such as `GET /api/latest-workout`.
+
+### Objective and bodyweight
+
+`POST /api/settings/objective` accepts `{"objective":"..."}` (blank clears it)
+and returns `{"objective":"..."}`. `POST /api/settings/bodyweight` accepts
+`{"bodyweight_kg": 82.5}` or `{"bodyweight_kg": null}`; non-positive values are
+also treated as clearing it (matching the existing bodyweight-driven TCX
+calorie estimate, which falls back to 0 rather than a fabricated number). It
+returns `{"bodyweight_kg": 82.5}` or `{"bodyweight_kg": null}`.
+
+### AI program builder
+
+The Workout tab owns program creation. `GET /api/programs/builder` returns the
+persisted single-user draft as `{"messages":[{"role":"user"|"assistant",
+"content":"..."}],"plan":<plan|null>}`. The plan is recomputed from the
+validated internal v2 program object.
+
+`POST /api/programs/builder/message` accepts `{"content":"..."}`. It appends
+one user message, calls Claude Haiku with the saved transcript, exercise
+library, and active-program context, then returns `{"state":"ok","message":
+"...","plan":<plan|null>}`. A candidate is never persisted as a real program
+until applied. The shared daily AI guardrail returns `{"state":"limit",
+"message":"..."}`; unavailable or malformed AI responses return
+`{"state":"error","message":"..."}`.
+
+`POST /api/programs/builder/apply` validates the stored candidate again, then
+uses `importer.apply_import` to create or replace/activate its program,
+replace same-name routines, archive dropped routines, and case-insensitively
+reuse or create exercises. It returns `{"result":<plan>}` and clears the
+draft. `POST /api/programs/builder/discard` clears the draft and returns
+`{"ok":true}`.
+
+### Deload defer
+
+`POST /api/deload/defer` takes no body and returns
+`{"deload_deferred_until": "2026-09-03T00:00:00Z"}`, pushing the deload one
+week out exactly like the existing HTML control.
+
+### Exports (unchanged, outside `/api/*`)
+
+`GET /export` (full backup) and `GET /export/program` (active program only,
+the internal v2 builder shape) remain cookie-authenticated JSON file downloads
+outside `/api/*`, per this document's file-download exception — consistent
+with the TCX export above. They are not part of the automation-token surface.
